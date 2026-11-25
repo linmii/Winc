@@ -116,6 +116,8 @@ impl App {
             GoBack => self.navigate_history(false),
             GoForward => self.navigate_history(true),
             Settings => self.open_settings(),
+            ExportSettings => self.pick(Pick::ExportSettings),
+            ImportSettings => self.pick(Pick::ImportSettings),
             ReleaseNotes => self.open_release_notes(crate::release_notes::Scope::All),
             KeyboardShortcuts => {
                 self.open_settings();

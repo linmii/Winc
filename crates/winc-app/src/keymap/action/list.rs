@@ -22,6 +22,8 @@ pub const ACTIONS: &[Action] = {
         GoForward,
         ShowCommands,
         Settings,
+        ExportSettings,
+        ImportSettings,
         ReleaseNotes,
         KeyboardShortcuts,
         RecordKeys,

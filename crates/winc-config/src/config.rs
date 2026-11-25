@@ -3,6 +3,7 @@
 //! 每一项设置的键名和读写规则由 `fields` 模块给出。
 
 mod fields;
+mod transfer;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -11,6 +12,8 @@ use crate::files::{config_dir, write_atomic};
 use crate::json::{self, Json};
 use fields::*;
 use winc_i18n::{LocaleChoice, t};
+
+pub use transfer::{Imported, export_config, import_config};
 
 /// 用户配置。
 ///

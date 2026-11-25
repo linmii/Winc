@@ -9,6 +9,7 @@ use winc_config::AutoSave;
 use winc_i18n::t;
 
 use super::*;
+use crate::app::settings::{EXPORTED_SETTINGS, SETTINGS_EXTENSIONS};
 use crate::system;
 
 /// 「停止输入后」自动保存时，最后一次修改之后等待的时间。
@@ -54,6 +55,10 @@ pub enum Pick {
     SaveProject,
     /// 「打开项目…」：只能选项目文件（见 [`winc_config::PROJECT_EXTENSIONS`]）。
     OpenProject,
+    /// 「导出设置…」：选导出文件的保存位置。
+    ExportSettings,
+    /// 「导入设置…」：只能选 JSON 文件。
+    ImportSettings,
 }
 
 /// 无法打开的文件在编辑区中给出的操作。
@@ -1081,6 +1086,7 @@ impl App {
             }
             Pick::KeyFile => (String::new(), crate::app::remote::key_dir()),
             Pick::SaveProject => self.project_save_place(),
+            Pick::ExportSettings => (EXPORTED_SETTINGS.to_owned(), None),
             Pick::PluginPackage
             | Pick::Open
             | Pick::PluginFolder
@@ -1090,6 +1096,7 @@ impl App {
             | Pick::AddFolder
             | Pick::BackgroundImage
             | Pick::OpenProject
+            | Pick::ImportSettings
             | Pick::Download(_) => (String::new(), None),
         };
 
@@ -1113,6 +1120,11 @@ impl App {
                     dir: None,
                     types: winc_config::PROJECT_EXTENSIONS,
                 },
+                Pick::ImportSettings => Panel::Open {
+                    files: true,
+                    dir: None,
+                    types: SETTINGS_EXTENSIONS,
+                },
                 Pick::PluginFolder
                 | Pick::OpenFolder
                 | Pick::WslFolder(_)
@@ -1123,7 +1135,7 @@ impl App {
                     dir: None,
                     types: &[],
                 },
-                Pick::SaveAs(_) | Pick::SaveProject => Panel::Save {
+                Pick::SaveAs(_) | Pick::SaveProject | Pick::ExportSettings => Panel::Save {
                     name: &name,
                     dir: dir.as_deref(),
                 },
@@ -1162,6 +1174,14 @@ impl App {
                         )),
                     };
                     (choose, t!("cmd-open-project"))
+                }
+                Pick::ImportSettings => {
+                    let choose = Choose::Open {
+                        directory: false,
+                        dir: None,
+                        types: Some((t!("settings-files"), SETTINGS_EXTENSIONS)),
+                    };
+                    (choose, t!("cmd-import-settings"))
                 }
                 Pick::KeyFile => {
                     let choose = Choose::Open {
@@ -1205,6 +1225,13 @@ impl App {
                     },
                     t!("cmd-save-project-as"),
                 ),
+                Pick::ExportSettings => (
+                    Choose::Save {
+                        name: &name,
+                        dir: dir.as_deref(),
+                    },
+                    t!("cmd-export-settings"),
+                ),
             };
             // 面板的标题不带省略号。
             let title = title.trim_end_matches('…');
@@ -1230,6 +1257,8 @@ impl App {
                 Pick::WslFolder(_) => t!("cmd-open-wsl-folder"),
                 Pick::SaveAs(_) => t!("cmd-save-as"),
                 Pick::SaveProject => t!("cmd-save-project-as"),
+                Pick::ExportSettings => t!("cmd-export-settings"),
+                Pick::ImportSettings => t!("cmd-import-settings"),
                 Pick::Download(_) => t!("menu-download"),
             };
             // 对话框的标题不带省略号；打开期间窗口不响应（`DialogOwner`）。
@@ -1241,6 +1270,9 @@ impl App {
             if matches!(kind, Pick::OpenProject) {
                 let name = t!("workspace-project-files");
                 dialog = dialog.add_filter(name, winc_config::PROJECT_EXTENSIONS);
+            }
+            if matches!(kind, Pick::ImportSettings) {
+                dialog = dialog.add_filter(t!("settings-files"), SETTINGS_EXTENSIONS);
             }
             // 对话框有自己的消息循环，在后台线程上等待关闭，事件循环正常运行。
             std::thread::spawn(move || {
@@ -1260,14 +1292,17 @@ impl App {
                     | Pick::BackgroundImage
                     | Pick::KeyFile
                     | Pick::PluginPackage
-                    | Pick::OpenProject => dialog.pick_file(),
+                    | Pick::OpenProject
+                    | Pick::ImportSettings => dialog.pick_file(),
                     Pick::PluginFolder
                     | Pick::OpenFolder
                     | Pick::WslFolder(_)
                     | Pick::WorktreeFolder
                     | Pick::AddFolder
                     | Pick::Download(_) => dialog.pick_folder(),
-                    Pick::SaveAs(_) | Pick::SaveProject => dialog.set_file_name(&name).save_file(),
+                    Pick::SaveAs(_) | Pick::SaveProject | Pick::ExportSettings => {
+                        dialog.set_file_name(&name).save_file()
+                    }
                 };
                 drop(owner);
                 let _ = proxy.send_event(UserEvent::Picked(kind, path));
@@ -1311,7 +1346,9 @@ impl App {
             | Pick::KeyFile
             | Pick::Download(_)
             | Pick::SaveProject
-            | Pick::OpenProject => None,
+            | Pick::OpenProject
+            | Pick::ExportSettings
+            | Pick::ImportSettings => None,
         };
 
         let Some(path) = path else { return };
@@ -1327,6 +1364,8 @@ impl App {
             Pick::Download(paths) => self.download(paths, path),
             Pick::SaveProject => self.save_project_as(path),
             Pick::OpenProject => self.open_from_outside(&path),
+            Pick::ExportSettings => self.export_settings(&path),
+            Pick::ImportSettings => self.import_settings(&path),
             Pick::SaveAs(id) => {
                 if self.save_picked(id, path)
                     && let Some(prompt) = continuation

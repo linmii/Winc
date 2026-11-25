@@ -22,6 +22,8 @@ impl Action {
             GoBack => "Go Back",
             GoForward => "Go Forward",
             Settings => "Settings",
+            ExportSettings => "Export Settings",
+            ImportSettings => "Import Settings",
             ReleaseNotes => "Release Notes",
             KeyboardShortcuts => "Keyboard Shortcuts",
             RecordKeys => "Record Keys",

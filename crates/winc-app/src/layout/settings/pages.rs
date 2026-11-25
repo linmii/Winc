@@ -116,6 +116,10 @@ impl SettingsPage {
                     }
                     sections.push(group(t!("settings-group-integration"), items));
                 }
+                sections.push(group(
+                    t!("settings-group-settings-file"),
+                    vec![S::ExportSettings, S::ImportSettings],
+                ));
                 sections
             }
             SettingsPage::Appearance => {

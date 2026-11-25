@@ -332,6 +332,25 @@ fn settings_written_back_keep_what_was_edited_in_the_file_meanwhile() {
 }
 
 #[test]
+fn settings_imported_in_one_window_reach_the_others() {
+    let (mut winc, a, b, dir) = two_windows("windows-config-import");
+    let path = dir.join("config.json");
+    for key in [a, b] {
+        winc.app(key).store.config_path = Some(path.clone());
+    }
+    let from = dir.join("settings.json");
+    std::fs::write(&from, r#"{"editor": {"size": 17}}"#).unwrap();
+    let pick = crate::app::workspace::files::Pick::ImportSettings;
+    winc.app(a).on_picked(pick, Some(from));
+    winc.settle_for_test();
+    assert_eq!(winc.app(b).config.editor_size, Some(17.0));
+    assert_eq!(winc.app(b).fonts.code, 17.0);
+    let config = winc.app(a).config.clone();
+    assert_eq!(winc.app(b).store.saved_config, config);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn files_cut_in_one_window_are_moved_when_pasted_in_another() {
     let (mut winc, a, b, dir) = two_windows("windows-cut");
     let file = dir.join("a.txt");

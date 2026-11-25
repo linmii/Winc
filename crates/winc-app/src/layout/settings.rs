@@ -247,6 +247,10 @@ pub enum Setting {
     ExplorerMenu,
     /// 把 Winc 列为各文件类型的候选程序（Windows 上由安装程序装在当前用户之下时）。
     FileAssociations,
+    /// 把配置文件导出为一个文件。
+    ExportSettings,
+    /// 用导出的文件替换当前的配置。
+    ImportSettings,
     /// 键位方案；只在搜索结果中作为一行列出，「快捷键」页顶部另有一份。
     Keymap,
     /// 搜索结果中名称或按键与搜索内容相符的命令：点击后在「快捷键」页中查看。
@@ -357,6 +361,7 @@ impl Setting {
             }
             S::GitRememberCredentials => SettingsPage::Git,
             S::ExplorerMenu | S::FileAssociations => SettingsPage::General,
+            S::ExportSettings | S::ImportSettings => SettingsPage::General,
             S::GitModule | S::TerminalModule | S::RemoteModule => SettingsPage::Modules,
             S::Version | S::Updates | S::ReleaseNotes | S::Website | S::Repository => {
                 SettingsPage::About
@@ -464,6 +469,7 @@ impl Setting {
             S::Website | S::Repository | S::Community | S::License | S::KeySearch => return None,
             S::Keymap | S::KeyMatches => return None,
             S::ExplorerMenu | S::FileAssociations => return None,
+            S::ExportSettings | S::ImportSettings => return None,
         })
     }
 
@@ -571,6 +577,8 @@ impl Setting {
             Setting::RemoteModule => t!("settings-remote-module"),
             Setting::ExplorerMenu => t!("settings-explorer-menu"),
             Setting::FileAssociations => t!("settings-file-associations"),
+            Setting::ExportSettings => t!("settings-export"),
+            Setting::ImportSettings => t!("settings-import"),
             Setting::KeySearch => t!("settings-key-search"),
             Setting::Keymap => t!("settings-keys-keymap"),
             Setting::KeyMatches => t!("settings-key-matches"),
@@ -658,6 +666,8 @@ impl Setting {
             Setting::RemoteModule => Some(t!("settings-remote-module-desc")),
             Setting::ExplorerMenu => Some(t!("settings-explorer-menu-desc")),
             Setting::FileAssociations => Some(t!("settings-file-associations-desc")),
+            Setting::ExportSettings => Some(t!("settings-export-desc")),
+            Setting::ImportSettings => Some(t!("settings-import-desc")),
             Setting::GitConfirmPush => Some(t!("settings-git-confirm-push-desc")),
             Setting::GitRememberCredentials => Some(t!("settings-git-remember-credentials-desc")),
             Setting::SystemProxy => Some(t!("settings-system-proxy-desc")),
@@ -790,6 +800,7 @@ impl Setting {
             | Setting::Community
             | Setting::License => SettingControl::Link,
             Setting::Updates | Setting::KeyMatches => SettingControl::Button,
+            Setting::ExportSettings | Setting::ImportSettings => SettingControl::Button,
         }
     }
 }
