@@ -1,8 +1,7 @@
 name: Feature request
 description: Propose a product or technical improvement for winc.
 title: "[Feature]: "
-labels:
-  - enhancement
+type: Feature
 body:
   - type: dropdown
     id: area
@@ -28,6 +27,20 @@ body:
         - Other
     validations:
       required: true
+  - type: dropdown
+    id: platforms
+    attributes:
+      label: Platforms
+      description: >-
+        Select only when the request concerns some systems and not others. The issue is labeled
+        with them.
+      multiple: true
+      options:
+        - macOS
+        - Linux
+        - Windows
+    validations:
+      required: false
   - type: textarea
     id: problem
     attributes:

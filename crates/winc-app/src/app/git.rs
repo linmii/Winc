@@ -641,6 +641,24 @@ impl App {
         }
     }
 
+    /// 返回文件 `path` 所在的已知仓库（[`GitState::repositories`] 和当前仓库）的根目录，以及
+    /// 文件在仓库中的路径；不在任何已知仓库中时返回 `None`。
+    ///
+    /// 打开的目录里有几个仓库时不一定是当前仓库，取包含该文件的最里层那个。原路径不在已知仓库中时
+    /// 按经过符号链接解析后的路径再找一次（macOS 的 `/var` 即 `/private/var`）。
+    pub(in crate::app) fn repo_of(&self, path: &Path) -> Option<(PathBuf, PathBuf)> {
+        let owner = |path: &Path| {
+            let repos = self.git.repositories.iter().chain(&self.git.root);
+            let inside = repos.filter(|repo| path.starts_with(repo));
+            inside.max_by_key(|repo| repo.as_os_str().len()).cloned()
+        };
+        if let Some(root) = owner(path) {
+            return Some((root, path.to_path_buf()));
+        }
+        let path = winc_config::files::canonicalize(path).ok()?;
+        Some((owner(&path)?, path))
+    }
+
     /// 将当前仓库切换为 `root`；没有变化时不做任何操作。
     pub(in crate::app) fn git_set_root(&mut self, root: Option<PathBuf>) {
         if root == self.git.root {

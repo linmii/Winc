@@ -1238,6 +1238,11 @@ impl App {
         self.window.handle.as_ref().map(|w| w.id())
     }
 
+    /// 返回系统窗口；还没有创建（测试中）时返回 `None`。
+    pub(crate) fn system_window(&self) -> Option<&Arc<winit::window::Window>> {
+        self.window.handle.as_ref()
+    }
+
     /// 返回鼠标位置（逻辑像素）。
     pub(crate) fn mouse(&self) -> (f32, f32) {
         self.pointer.mouse
