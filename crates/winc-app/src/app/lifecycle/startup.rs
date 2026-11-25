@@ -50,6 +50,7 @@ impl App {
             editor,
             terminal: terminal::TerminalPanel::default(),
             run: terminal::run::RunConfigs::default(),
+            plugins: Default::default(),
             store: crate::app::settings::Store {
                 saved_config: config.clone(),
                 config_path: None,

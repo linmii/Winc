@@ -21,7 +21,7 @@ impl Binding {
         match self.second {
             // 连按两下同一个修饰键：macOS 上写作 `⇧⇧`，其他系统上写作 `Shift Shift`。
             Some(second) if os == Os::Mac && self.first.key == KeyCode::Tap => {
-                self.first.label(os) + &second.label(os)
+                self.first.label(os) + second.label(os).as_str()
             }
             Some(second) => format!("{} {}", self.first.label(os), second.label(os)),
             None => self.first.label(os),

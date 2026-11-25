@@ -763,9 +763,9 @@ fn draw_palette_rows(app: &App, frame: &mut Frame<'_>, parts: &PickerParts) {
 
         // 查询命中的字用强调色标出来：中文名、英文名谁命中标谁。
         let title = action.title();
-        let marked = app.palette_matched(title);
+        let marked = app.palette_matched(&title);
         let at = (row.x + PICKER_TEXT_X, row);
-        let x = marked_label(frame, app, app.fonts.ui, at, title, &marked, p.text, clip);
+        let x = marked_label(frame, app, app.fonts.ui, at, &title, &marked, p.text, clip);
         let room = (right - x - 8.0).max(0.0);
         if room > 20.0 {
             let english = ellipsize(frame, action.english(), app.fonts.ui_small, room);

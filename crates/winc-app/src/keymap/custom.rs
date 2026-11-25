@@ -16,6 +16,8 @@ pub type Keys = (Stroke, Option<Stroke>);
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Custom {
     entries: Vec<(Action, Vec<Keys>)>,
+    // Keep bindings for temporarily missing plugins across unrelated shortcut edits.
+    missing_plugins: BTreeMap<String, Vec<String>>,
 }
 
 impl Custom {
@@ -27,6 +29,10 @@ impl Custom {
         let mut problems = Vec::new();
         for (id, specs) in map {
             let Some(action) = Action::from_id(id) else {
+                if id.starts_with("plugin:") {
+                    custom.missing_plugins.insert(id.clone(), specs.clone());
+                    continue;
+                }
                 problems.push(t!("config-shortcut-unknown-command", name = id.as_str()));
                 continue;
             };
@@ -54,13 +60,14 @@ impl Custom {
                 let specs = keys.iter().map(|&(a, b)| binding_spec(a, b, os)).collect();
                 (action.id(), specs)
             })
+            .chain(self.missing_plugins.clone())
             .collect()
     }
 
     /// 是否没有改过任何键。
     #[cfg(test)]
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.is_empty() && self.missing_plugins.is_empty()
     }
 
     /// 返回命令 `action` 改过的键；没改过时返回 `None`。
@@ -106,6 +113,11 @@ impl Custom {
         let mut table = base.clone();
         let mut added: Vec<Binding> = Vec::new();
         for (action, keys) in &self.entries {
+            if let Action::Plugin(slot) = action
+                && super::plugins::command(*slot).is_none()
+            {
+                continue;
+            }
             let scopes = scopes(*action, &base, || {
                 others.get_or_insert_with(|| Preset::ALL.map(|p| p.bindings(os)).to_vec())
             });
@@ -154,6 +166,9 @@ fn scopes<'a>(
     table: &[Binding],
     presets: impl FnOnce() -> &'a mut Vec<Vec<Binding>>,
 ) -> Vec<When> {
+    if matches!(action, Action::Plugin(_)) {
+        return vec![When::Editor];
+    }
     let collect = |table: &[Binding]| {
         let mut scopes: Vec<When> = Vec::new();
         for b in table.iter().filter(|b| b.action == action) {

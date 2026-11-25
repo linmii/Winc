@@ -1,0 +1,14 @@
+{
+  "id": "winc.remove-duplicate-lines",
+  "name": "去除重复行 / Remove Duplicate Lines",
+  "version": "1.0.0",
+  "api_version": 1,
+  "commands": [
+    {
+      "id": "remove-duplicates",
+      "title": "去除重复行 / Remove Duplicate Lines",
+      "script": "main.rhai",
+      "options": { "ignore_case": false, "trim_whitespace": false }
+    }
+  ]
+}

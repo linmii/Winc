@@ -12,6 +12,7 @@ homepage.workspace = true
 winc-emoji.workspace = true
 winc-backend.workspace = true
 winc-config.workspace = true
+winc-plugin.workspace = true
 winc-core.workspace = true
 winc-syntax.workspace = true
 winc-render.workspace = true

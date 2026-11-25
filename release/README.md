@@ -44,6 +44,34 @@ rerun the Release workflow on that tag to retry a failed build.
 
 ## Signing configuration
 
+### Fork: Windows portable only
+
+This fork also provides **Windows portable (custom)** in
+`.github/workflows/windows-portable.yml`. Pushing `codex/plugin-system` builds an unsigned
+Windows x64 portable ZIP with the text plugin runtime and the duplicate-line example. It uses
+no signing secrets and uploads a ZIP plus `SHA256SUMS` as an Actions artifact for 14 days.
+It does not create a GitHub Release. Enable Actions in the fork before pushing the branch.
+
+After committing the desired changes, push with `git push -u origin codex/plugin-system`.
+Open the successful workflow run under **Actions**, then download its **Artifacts**.
+The downloaded artifact contains the portable ZIP. Extract that ZIP and launch `winc.exe`.
+The workflow also supports `workflow_dispatch`; GitHub's manual-run button requires the
+workflow file on the repository's default branch. Change the push branch filter when moving
+custom development to a different branch.
+
+For local packaging, build the Windows programs and Linux helpers as in the workflow, fetch
+the pinned console host, then run (PowerShell 7):
+
+```powershell
+./release/windows/package.ps1 -Phase portable -IncludePlugins
+./release/windows/verify-portable.ps1 -Archive "target/x86_64-pc-windows-msvc/release/bundle/portable/Winc-<version>-windows-x64-portable.zip" -IncludePlugins
+```
+
+Keep final ZIPs under `release/out/` before removing `target/`. The portable profile lives in
+`data/` beside the executable; preserve that directory when updating a personal installation.
+
+### Full upstream release
+
 Apart from the update key, names are identical to DEEIX Chat. Store private values as repository or
 organization **Secrets**, not Variables or committed files.
 

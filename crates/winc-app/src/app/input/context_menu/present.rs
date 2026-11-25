@@ -338,6 +338,7 @@ impl App {
     /// 目标文档已不存在时不弹出。
     pub(in crate::app) fn open_context_menu(&mut self, target: MenuTarget, at: (f32, f32)) {
         let entries = match &target {
+            MenuTarget::Plugins(ids) => self.plugin_menu(ids),
             &MenuTarget::AddLanguage(task) => {
                 let listed = match task {
                     Task::Format => &self.settings.languages.format,

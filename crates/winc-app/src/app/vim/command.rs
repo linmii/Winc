@@ -822,7 +822,8 @@ impl App {
 
 /// 返回英文名为 `name` 的命令，不区分大小写。
 fn named_action(name: &str) -> Option<Action> {
-    let actions = crate::app::palette().iter().copied();
+    let palette = crate::app::palette();
+    let actions = palette.iter().copied();
     actions
         .into_iter()
         .find(|action| action.english().eq_ignore_ascii_case(name.trim()))

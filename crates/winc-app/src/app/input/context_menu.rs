@@ -98,6 +98,10 @@ pub enum MenuButton {
 /// 菜单中的一条命令。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuCommand {
+    /// Enable or disable the plugin at the selected menu index.
+    PluginEnable(usize, bool),
+    /// Uninstall the plugin at the selected menu index.
+    PluginRemove(usize),
     NewFile,
     NewFolder,
     /// 把一个目录加为窗口的附加目录。
@@ -523,10 +527,13 @@ impl MenuCommand {
     pub fn label(self) -> &'static str {
         match self {
             MenuCommand::GitAction(action) => {
-                let title = action.title();
+                let title = action.builtin_title();
                 let rest = title.split_once(['：', ':']).map(|(_, rest)| rest);
                 rest.map_or(title, str::trim_start)
             }
+            MenuCommand::PluginEnable(_, true) => t!("plugin-enable"),
+            MenuCommand::PluginEnable(_, false) => t!("plugin-disable"),
+            MenuCommand::PluginRemove(_) => t!("plugin-uninstall"),
             MenuCommand::NewFile => t!("menu-new-file"),
             MenuCommand::NewFolder => t!("menu-new-folder"),
             MenuCommand::AddFolder => t!("cmd-add-folder"),
@@ -886,6 +893,8 @@ impl MenuCommand {
 /// 菜单所作用的目标：右键点击的位置，或弹出菜单的按钮。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MenuTarget {
+    /// Stable plugin ids captured when opening the manager.
+    Plugins(Vec<String>),
     /// 文件树中的一项；`None` 表示空白处，即根目录。
     Tree(Option<PathBuf>),
     /// 标签栏中的一个标签。

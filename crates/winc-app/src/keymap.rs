@@ -14,6 +14,7 @@ mod custom;
 #[allow(clippy::disallowed_methods, reason = "只访问本机：其他编辑器的配置")]
 pub mod import;
 mod page;
+pub(crate) mod plugins;
 mod presets;
 mod spec;
 mod table;
@@ -23,6 +24,7 @@ mod tests;
 pub use action::*;
 pub use custom::*;
 pub use page::*;
+pub use plugins::actions;
 pub use presets::Preset;
 pub use spec::*;
 pub use table::*;
@@ -309,7 +311,7 @@ impl Stroke {
                     text.push(symbol);
                 }
             }
-            text + &key
+            text + key.as_str()
         } else {
             let meta = if os == Os::Windows { "Win" } else { "Super" };
             let mut parts: Vec<&str> = [
@@ -537,6 +539,7 @@ struct Active {
     preset: Preset,
     table: std::sync::Arc<[Binding]>,
     rows: std::sync::Arc<[(Group, Vec<Row>)]>,
+    commands: std::sync::Arc<[Action]>,
 }
 
 /// 当前的键位表；尚未调用 [`install`] 时为默认方案。
@@ -558,6 +561,7 @@ pub fn install(preset: Preset, custom: &Custom) {
         preset,
         table,
         rows,
+        commands: actions().into_iter().filter(|a| a.in_palette()).collect(),
     });
     #[cfg(not(test))]
     {
@@ -583,6 +587,11 @@ fn active() -> std::sync::Arc<Active> {
     }
     install(Preset::default(), &Custom::default());
     active()
+}
+
+/// Cached command palette snapshot, refreshed together with shortcut settings.
+pub fn commands() -> std::sync::Arc<[Action]> {
+    active().commands.clone()
 }
 
 /// 返回当前编译目标系统上正在使用的绑定表。

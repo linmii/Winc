@@ -28,6 +28,7 @@ impl App {
         }
 
         match menu.target {
+            MenuTarget::Plugins(ids) => self.plugin_menu_command(&ids, command),
             MenuTarget::Tree(path) => self.run_tree_command(command, path),
             MenuTarget::Tab(id) => self.run_tab_command(command, id),
             MenuTarget::CommitFile(path) => self.run_commit_file_command(command, path),

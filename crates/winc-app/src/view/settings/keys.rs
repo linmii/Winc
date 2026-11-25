@@ -270,7 +270,8 @@ fn draw_name(
     let size = app.fonts.ui_small;
     let x = rect.x + SETTINGS_INSET;
     let room = (right - 10.0 - x).max(0.0);
-    let title = ellipsize(frame, action.title(), app.fonts.ui, room);
+    let full_title = action.title();
+    let title = ellipsize(frame, &full_title, app.fonts.ui, room);
     let end = ui_text(frame, app, x, rect, &title, p.text, clip);
     if let Some(note) = note {
         let room = (right - 10.0 - end - 8.0).max(0.0);

@@ -77,6 +77,11 @@ impl App {
         };
 
         match action {
+            Plugin(slot) => self.run_plugin(slot),
+            ImportPluginFolder => self.pick(Pick::PluginFolder),
+            ImportPluginPackage => self.pick(Pick::PluginPackage),
+            ManagePlugins => self.manage_plugins(),
+            ReloadPlugins => self.reload_plugins(),
             ShowCommands => self.toggle_palette(),
             QuickOpen => {
                 if self.overlays.picker.open
@@ -535,6 +540,7 @@ impl App {
     /// 命令当前是否可用：属于某个模块的命令只在模块开着时可用。
     pub(in crate::app) fn action_available(&self, action: Action) -> bool {
         match action {
+            Action::Plugin(slot) => return self.plugin_available(slot),
             Action::RunConfiguration if self.editor.root().is_none() => return false,
             // 只有打开的目录还不是仓库时才能初始化。
             Action::GitInit if self.editor.root().is_none() || self.git.root.is_some() => {

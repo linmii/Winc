@@ -211,6 +211,7 @@ impl ApplicationHandler<UserEvent> for App {
             let _ = proxy.send_event(UserEvent::OfferMoveToApplications);
         }
         self.install_system_hooks();
+        self.reload_plugins();
         // 启动时恢复的目录在事件循环创建之前打开，此时才能开始监视、读取运行配置和恢复终端、侧栏。
         self.watch_folder();
         self.load_run_configs_for_window();
@@ -591,6 +592,7 @@ impl App {
             }
             UserEvent::Delete(paths, permanent) => self.delete_entries(&paths, permanent),
             UserEvent::Formatted => self.poll_formatting(),
+            UserEvent::PluginsReady => self.poll_plugins(),
             UserEvent::ToolChoice(answer) => self.answer_tool_choice(answer),
             UserEvent::GitTrust(root, fingerprint, trusted) => {
                 self.answer_git_trust(&root, fingerprint, trusted);
@@ -609,6 +611,7 @@ impl App {
     /// 返回本窗口下一次唤醒的时刻；无需唤醒时返回 `None`。应用层取各窗口中最早的时刻（见
     /// [`crate::winc`]）。窗口何时退出由应用层决定，本窗口只设置 `Closing::quit_requested`。
     pub(crate) fn tick(&mut self) -> Option<Instant> {
+        self.sync_plugin_commands();
         let now = Instant::now();
         self.track_navigation();
 
@@ -828,6 +831,7 @@ impl App {
         // 等待后台保存的大文件写完，避免留下写入不完整的临时文件。
         self.wait_for_saves();
         self.cancel_all_formatting();
+        self.cancel_plugin();
         // 同意退出后不再定时写备份，但其他窗口仍在询问期间本窗口的文档可能再被修改，因此按当前
         // 内容再写一次备份，使下次启动恢复最新内容。未经询问直接退出时（未保存的内容均已有
         // 备份，或系统注销、关机）同样按当前内容写一次，不丢失最近的修改。

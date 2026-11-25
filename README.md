@@ -81,6 +81,9 @@ winc is developed and tested mainly on macOS. Download it from
 
 ## Command Line
 
+This fork supports local Rhai/Grain text transformation plugins, including a remove-duplicate-lines
+example. See the [plugin guide and API](PLUGINS.md) (Chinese).
+
 ```bash
 winc .                  # open the current folder
 winc file.rs:12:5       # open a file at a line and column

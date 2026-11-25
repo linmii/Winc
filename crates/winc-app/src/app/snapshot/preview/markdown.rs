@@ -605,9 +605,10 @@ fn time_huge_blocks() {
         .map(|i| format!("- 第 {i} 项，**加粗** 和 `代码`\n"))
         .collect();
     let table: String = "| a | b | c |\n|---|---|---|\n".to_owned()
-        + &(0..8000)
+        + (0..8000)
             .map(|i| format!("| {i} | 第 {i} 行 | 说明 |\n"))
-            .collect::<String>();
+            .collect::<String>()
+            .as_str();
     let code = format!(
         "```rust\n{}```\n",
         (0..20000)

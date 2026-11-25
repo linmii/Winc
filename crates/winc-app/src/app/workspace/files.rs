@@ -28,6 +28,10 @@ pub(crate) struct AutoSaveWatch {
 /// 系统文件对话框的用途。
 #[derive(Debug, Clone)]
 pub enum Pick {
+    /// Choose a local plugin directory.
+    PluginFolder,
+    /// Choose a plugin manifest or ZIP.
+    PluginPackage,
     /// 可选择文件和目录（`⌘O`）。
     Open,
     /// 只能选择目录。
@@ -993,7 +997,9 @@ impl App {
                 (name, dir)
             }
             Pick::KeyFile => (String::new(), crate::app::remote::key_dir()),
-            Pick::Open
+            Pick::PluginPackage
+            | Pick::Open
+            | Pick::PluginFolder
             | Pick::OpenFolder
             | Pick::WslFolder(_)
             | Pick::WorktreeFolder
@@ -1010,11 +1016,14 @@ impl App {
                 return;
             };
             let panel = match &kind {
-                Pick::Open | Pick::BackgroundImage | Pick::KeyFile => Panel::Open {
-                    files: true,
-                    dir: dir.as_deref(),
-                },
-                Pick::OpenFolder
+                Pick::Open | Pick::BackgroundImage | Pick::KeyFile | Pick::PluginPackage => {
+                    Panel::Open {
+                        files: true,
+                        dir: dir.as_deref(),
+                    }
+                }
+                Pick::PluginFolder
+                | Pick::OpenFolder
                 | Pick::WslFolder(_)
                 | Pick::WorktreeFolder
                 | Pick::AddFolder
@@ -1043,7 +1052,7 @@ impl App {
             use crate::portal::Choose;
             // 门户的面板只能选文件或者只能选目录：「打开…」选文件，目录从「打开目录…」选。
             let (choose, title) = match &kind {
-                Pick::Open | Pick::BackgroundImage => {
+                Pick::Open | Pick::BackgroundImage | Pick::PluginPackage => {
                     let choose = Choose::Open {
                         directory: false,
                         dir: None,
@@ -1057,7 +1066,11 @@ impl App {
                     };
                     (choose, t!("workspace-remote-dialog-key-choose"))
                 }
-                Pick::OpenFolder | Pick::WslFolder(_) | Pick::WorktreeFolder | Pick::AddFolder => {
+                Pick::PluginFolder
+                | Pick::OpenFolder
+                | Pick::WslFolder(_)
+                | Pick::WorktreeFolder
+                | Pick::AddFolder => {
                     let choose = Choose::Open {
                         directory: true,
                         dir: None,
@@ -1094,8 +1107,9 @@ impl App {
         {
             // 系统的对话框只能选文件或者只能选目录：「打开…」选文件，目录从「打开目录…」选。
             let title = match &kind {
-                Pick::Open | Pick::BackgroundImage => t!("cmd-open-file"),
+                Pick::Open | Pick::BackgroundImage | Pick::PluginPackage => t!("cmd-open-file"),
                 Pick::KeyFile => t!("workspace-remote-dialog-key-choose"),
+                Pick::PluginFolder => t!("cmd-import-plugin-folder"),
                 Pick::OpenFolder | Pick::WorktreeFolder => t!("cmd-open-folder"),
                 Pick::AddFolder => t!("cmd-add-folder"),
                 Pick::WslFolder(_) => t!("cmd-open-wsl-folder"),
@@ -1120,8 +1134,11 @@ impl App {
                     dialog = dialog.set_directory(home.unwrap_or(root));
                 }
                 let path = match &kind {
-                    Pick::Open | Pick::BackgroundImage | Pick::KeyFile => dialog.pick_file(),
-                    Pick::OpenFolder
+                    Pick::Open | Pick::BackgroundImage | Pick::KeyFile | Pick::PluginPackage => {
+                        dialog.pick_file()
+                    }
+                    Pick::PluginFolder
+                    | Pick::OpenFolder
                     | Pick::WslFolder(_)
                     | Pick::WorktreeFolder
                     | Pick::AddFolder
@@ -1158,7 +1175,9 @@ impl App {
         // 取消或保存失败时放弃整个关闭。
         let continuation = match kind {
             Pick::SaveAs(_) => self.closing.continuation.take(),
-            Pick::Open
+            Pick::PluginPackage
+            | Pick::Open
+            | Pick::PluginFolder
             | Pick::OpenFolder
             | Pick::WslFolder(_)
             | Pick::WorktreeFolder
@@ -1171,6 +1190,7 @@ impl App {
         let Some(path) = path else { return };
 
         match kind {
+            Pick::PluginFolder | Pick::PluginPackage => self.import_plugin(path),
             Pick::Open => {
                 self.open_path(&path);
                 self.note_opened_file(&path);
