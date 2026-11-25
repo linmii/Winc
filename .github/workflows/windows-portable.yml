@@ -1,9 +1,9 @@
 name: Windows portable (custom)
 
-# A push works even before this workflow reaches the fork's default branch.
+# Build branches with plugins; dev and main stay exact mirrors of upstream.
 on:
   push:
-    branches: [codex/plugin-system]
+    branches: [codex/dev, codex/plugin-system]
   workflow_dispatch:
 
 permissions:
