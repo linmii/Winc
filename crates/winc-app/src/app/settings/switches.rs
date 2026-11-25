@@ -6,6 +6,9 @@ impl App {
     /// 开关 `setting` 当前是否开启。
     pub(crate) fn switch_on(&self, setting: Setting) -> bool {
         match setting {
+            Setting::KeywordItalic => {
+                self.editor_token_font(winc_syntax::TokenKind::Keyword) == FontKind::MonoItalic
+            }
             Setting::FormatOnSave => self.config.format_on_save == Some(true),
             Setting::FixOnSave => self.config.fix_on_save == Some(true),
             Setting::HotExit => self.config.hot_exit != Some(false),
@@ -83,6 +86,7 @@ impl App {
         }
         self.vim_forget_option(setting);
         match setting {
+            Setting::KeywordItalic => self.config.editor_keyword_italic = Some(on),
             Setting::FormatOnSave => self.config.format_on_save = Some(on),
             Setting::FixOnSave => self.config.fix_on_save = Some(on),
             Setting::HotExit => self.config.hot_exit = Some(on),

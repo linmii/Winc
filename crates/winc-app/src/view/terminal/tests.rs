@@ -3,6 +3,29 @@
 use super::*;
 
 #[test]
+fn one_dark_pro_terminal_uses_its_own_foreground_when_reversed() {
+    let p = &crate::theme::ONE_DARK_PRO;
+    let colors = |reverse| Colors {
+        p,
+        reverse,
+        min: 0.0,
+        bright: false,
+    };
+    let normal = Style::default();
+    assert_ne!(p.terminal_text, p.syntax_text);
+    assert_eq!(colors(false).style(&normal).fg, p.terminal_text);
+    assert_eq!(colors(true).default_bg(), p.terminal_text);
+    assert_eq!(colors(true).style(&normal).fg, p.editor_bg);
+
+    let inverse = Style {
+        attrs: Attrs(Attrs::INVERSE),
+        ..normal
+    };
+    assert_eq!(colors(false).style(&inverse).bg, Some(p.terminal_text));
+    assert_eq!(colors(true).style(&inverse).fg, p.terminal_text);
+}
+
+#[test]
 fn bold_is_bright_only_when_asked() {
     let p = &crate::theme::DARK;
     let bold_red = Style {

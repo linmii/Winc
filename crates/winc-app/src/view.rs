@@ -529,9 +529,14 @@ fn field_box(
             let inner = Rect::new(x, y, snap(rect.right()) - x, snap(rect.bottom()) - y);
             let ring = scale.round().max(1.0) / scale;
             frame.rounded(inner.inset(-ring, -ring), color, RADIUS_ROW + ring);
-            frame.rounded(inner, p.editor_bg, RADIUS_ROW);
+            frame.rounded(inner, p.input_bg.unwrap_or(p.editor_bg), RADIUS_ROW);
         }
-        None => frame.rounded(rect, workspace::panel::over(base, p.hover), RADIUS_ROW),
+        None => frame.rounded(
+            rect,
+            p.input_bg
+                .unwrap_or_else(|| workspace::panel::over(base, p.hover)),
+            RADIUS_ROW,
+        ),
     }
 }
 

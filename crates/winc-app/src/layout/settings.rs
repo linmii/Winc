@@ -55,6 +55,8 @@ pub enum Setting {
     EditorFont,
     /// 编辑区字号。
     EditorSize,
+    /// 关键字斜体；未手动设置时跟随主题。
+    KeywordItalic,
     /// Tab 宽度。
     TabWidth,
     /// 自动保存。
@@ -320,7 +322,9 @@ impl Setting {
             S::Minimap | S::StickyScroll | S::RenderWhitespace | S::WholeLines => {
                 SettingsPage::Editor
             }
-            S::SmoothCaret | S::DragAndDrop | S::FullTabNames => SettingsPage::Editor,
+            S::SmoothCaret | S::DragAndDrop | S::FullTabNames | S::KeywordItalic => {
+                SettingsPage::Editor
+            }
             S::DefaultLanguage | S::DetectLanguageOnPaste | S::VimMode | S::VimClipboard => {
                 SettingsPage::Editor
             }
@@ -382,6 +386,7 @@ impl Setting {
             S::Language => "language",
             S::EditorFont => "editor.font",
             S::EditorSize => "editor.size",
+            S::KeywordItalic => "editor.keywordItalic",
             S::TabWidth => "editor.tabWidth",
             S::AutoSave => "editor.autoSave",
             S::HotExit => "editor.hotExit",
@@ -487,6 +492,7 @@ impl Setting {
             Setting::SystemTitleBar => t!("settings-system-title-bar"),
             Setting::EditorFont => t!("settings-editor-font"),
             Setting::EditorSize => t!("settings-editor-size"),
+            Setting::KeywordItalic => t!("settings-keyword-italic"),
             Setting::TabWidth => t!("settings-tab-width"),
             Setting::AutoSave => t!("settings-auto-save"),
             Setting::HotExit => t!("settings-hot-exit"),
@@ -608,6 +614,7 @@ impl Setting {
             return Some(Cow::Owned(t!("settings-vim-key-desc", action = action)));
         }
         let text = match self {
+            Setting::KeywordItalic => Some(t!("settings-keyword-italic-desc")),
             Setting::SystemTitleBar => Some(t!("settings-system-title-bar-desc")),
             Setting::Zoom => Some(t!("settings-ui-zoom-desc")),
             Setting::AutoSave => Some(t!("settings-auto-save-desc")),
@@ -728,6 +735,7 @@ impl Setting {
             | Setting::VimRelativeNumber
             | Setting::VimYankHighlight
             | Setting::WordWrap
+            | Setting::KeywordItalic
             | Setting::WholeLines
             | Setting::Minimap
             | Setting::Outline

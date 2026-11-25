@@ -3,12 +3,18 @@
 //! 尺寸常量的单位均为逻辑像素。[`Palette`] 保存一套配色，[`ViewFonts`] 保存运行期的字号和行高；
 //! 文件类型图标的记号和颜色由 [`file_kind`] 按文件名给出。
 
+mod catppuccin_latte;
 mod kinds;
+mod one_dark_pro;
+mod one_light;
 mod palettes;
 mod veil;
 mod winc;
 
+pub use catppuccin_latte::*;
 pub use kinds::*;
+pub use one_dark_pro::*;
+pub use one_light::*;
 pub use palettes::*;
 pub use veil::*;
 pub use winc::*;
@@ -18,7 +24,7 @@ use std::time::Duration;
 
 use winc_config::BADGE_COLORS;
 use winc_core::text;
-use winc_render::Color;
+use winc_render::{Color, FontKind};
 use winc_syntax::TokenKind;
 
 use crate::icons::FileGlyph;
@@ -33,7 +39,7 @@ pub struct Palette {
     // 底色
     /// 窗口底色：侧栏、编辑区两张卡片四周和之间的留白，以及状态栏。
     pub frame_bg: Color,
-    /// 侧栏卡片的底色；所有配色里都与编辑区相同。
+    /// 侧栏卡片的底色；通常与编辑区相同，也可由主题单独指定。
     pub sidebar_bg: Color,
     /// 编辑区卡片的底色，代码和差异都画在此颜色上。
     pub editor_bg: Color,
@@ -45,6 +51,8 @@ pub struct Palette {
     pub tab_edge: Color,
     /// 设置页中一组设置项的底色：叠在编辑区底色之上，浅色配色下比编辑区底色略深，深色配色下略浅。
     pub group_bg: Color,
+    /// 输入框的独立底色；未指定时沿用所在卡片的交互层次。
+    pub input_bg: Option<Color>,
 
     // 线条与阴影
     /// 卡片内部的分隔线、设置项的描边。
@@ -125,6 +133,8 @@ pub struct Palette {
     pub indent_guide: Color,
     /// 光标所在代码块的缩进参考线颜色，比 `indent_guide` 深。
     pub indent_guide_active: Color,
+    /// 空格、制表符等可见空白标记的颜色。
+    pub whitespace: Color,
     /// 查找结果中非当前匹配的底色。
     pub search_match: Color,
     /// 查找结果中当前匹配的底色，比 `search_match` 浓。
@@ -165,7 +175,7 @@ pub struct Palette {
     pub badges: [(Color, Color); BADGE_COLORS],
 
     // 语法高亮
-    /// 代码正文；与界面正文 `text` 同色，使文件树、标签与代码在相同字号下的笔画粗细一致。
+    /// 代码正文；默认与界面正文 `text` 同色，也可由主题单独指定。
     pub syntax_text: Color,
     /// 关键字。
     pub syntax_keyword: Color,
@@ -183,7 +193,35 @@ pub struct Palette {
     pub syntax_decorator: Color,
     /// 配置文件中的键、样式表中的属性名。
     pub syntax_property: Color,
+    /// 变量名。
+    pub syntax_variable: Color,
+    /// 类型名。
+    pub syntax_type: Color,
+    /// 转义序列。
+    pub syntax_escape: Color,
+    /// 标记语言的标签名。
+    pub syntax_tag: Color,
+    /// 标记语言的属性名。
+    pub syntax_attribute: Color,
+    /// Markdown 标题。
+    pub syntax_heading: Color,
+    /// Markdown 强调。
+    pub syntax_emphasis: Color,
+    /// Markdown 加粗。
+    pub syntax_strong: Color,
+    /// 链接。
+    pub syntax_link: Color,
+    /// 差异文本中的新增行、日志中的正常状态。
+    pub syntax_inserted: Color,
+    /// 差异文本中的删除行、日志中的错误状态。
+    pub syntax_deleted: Color,
+    /// 日志中的警告状态。
+    pub syntax_warning: Color,
+    /// 使用等宽斜体的语法类别；旧主题默认仅注释使用斜体。
+    syntax_italic: &'static [TokenKind],
 
+    /// 终端的默认前景色，与代码正文可以不同。
+    pub terminal_text: Color,
     /// 终端的 16 色（黑、红、绿、黄、蓝、品红、青、白，再是各自的亮色）。
     pub ansi: [Color; 16],
 }
@@ -265,8 +303,8 @@ const WHITE: Color = Color::hex(0xFFFFFF);
 const BLACK: Color = Color::hex(0x000000);
 
 // 每个主题只写基本颜色（`Tokens`），其余按同一套规则算（`Palette::build`）：各主题的层次和
-// 对比度一致，换主题只换色相。两张卡片（侧栏、编辑区）在所有主题里是同一个颜色；窗框（四周的
-// 留白、状态栏）由各主题的 `frame` 决定，比卡片深一档或浅一档。
+// 对比度一致，换主题只换色相。默认侧栏、编辑区共用卡片色；移植主题可覆盖具体颜色。
+// 窗框（四周的留白、状态栏）由各主题的 `frame` 决定，比卡片深一档或浅一档。
 
 /// 项目徽章：深色主题用浅色底、深色字，各色的色相在色环上相隔。
 const BADGES_DARK: [(Color, Color); BADGE_COLORS] = {
@@ -403,6 +441,7 @@ impl Palette {
             tab_fill,
             tab_edge,
             group_bg: mix(ink, t.card, if dark { 0.035 } else { 0.03 }),
+            input_bg: None,
             border: mix(ink, t.card, if dark { 0.07 } else { 0.09 }),
             popup_border: ink.alpha(if dark { 0.09 } else { 0.08 }),
             shadow: BLACK.alpha(if dark { 0.5 } else { 0.14 }),
@@ -446,6 +485,7 @@ impl Palette {
             caret: if dark { mix(WHITE, t.text, 0.4) } else { BLACK },
             indent_guide: ink.alpha(if dark { 0.07 } else { 0.08 }),
             indent_guide_active: ink.alpha(if dark { 0.2 } else { 0.24 }),
+            whitespace: ink.alpha(if dark { 0.2 } else { 0.24 }),
             // 查找结果取主题的 Git 新增色（绿）：黄色压低浓度叠在深色卡片上偏褐，蓝色又与选区、
             // 选中行撞色，只有绿色既能看清又不与已有的标记混淆。
             search_match: t.git[1].alpha(if dark { 0.34 } else { 0.24 }),
@@ -480,6 +520,21 @@ impl Palette {
             syntax_function: t.syntax[6],
             syntax_decorator: t.syntax[7],
             syntax_property: t.syntax[8],
+            // 保留现有主题的类别映射，移植主题可独立覆盖这些颜色。
+            syntax_variable: t.syntax[8],
+            syntax_type: t.syntax[2],
+            syntax_escape: t.syntax[4],
+            syntax_tag: t.syntax[1],
+            syntax_attribute: t.syntax[8],
+            syntax_heading: t.syntax[7],
+            syntax_emphasis: t.syntax[2],
+            syntax_strong: t.syntax[1],
+            syntax_link: t.syntax[6],
+            syntax_inserted: t.syntax[3],
+            syntax_deleted: t.error,
+            syntax_warning: t.warning,
+            syntax_italic: &[TokenKind::Comment],
+            terminal_text: t.syntax[0],
             ansi: t.ansi,
         }
     }
@@ -544,19 +599,27 @@ impl Palette {
             TokenKind::Function => self.syntax_function,
             TokenKind::Decorator => self.syntax_decorator,
             TokenKind::Property => self.syntax_property,
-            // 以下类别还没有单独的主题色，借用词法上最接近的一类。
-            TokenKind::Variable => self.syntax_property,
-            TokenKind::Type => self.syntax_builtin,
-            TokenKind::Escape => self.syntax_number,
-            TokenKind::Tag => self.syntax_keyword,
-            TokenKind::Attribute => self.syntax_property,
-            TokenKind::Heading => self.syntax_decorator,
-            TokenKind::Emphasis => self.syntax_builtin,
-            TokenKind::Strong => self.syntax_keyword,
-            TokenKind::Link => self.syntax_function,
-            TokenKind::Inserted => self.syntax_string,
-            TokenKind::Deleted => self.error,
-            TokenKind::Warning => self.warning,
+            TokenKind::Variable => self.syntax_variable,
+            TokenKind::Type => self.syntax_type,
+            TokenKind::Escape => self.syntax_escape,
+            TokenKind::Tag => self.syntax_tag,
+            TokenKind::Attribute => self.syntax_attribute,
+            TokenKind::Heading => self.syntax_heading,
+            TokenKind::Emphasis => self.syntax_emphasis,
+            TokenKind::Strong => self.syntax_strong,
+            TokenKind::Link => self.syntax_link,
+            TokenKind::Inserted => self.syntax_inserted,
+            TokenKind::Deleted => self.syntax_deleted,
+            TokenKind::Warning => self.syntax_warning,
+        }
+    }
+
+    /// 返回语法标记的等宽字体，换主题时颜色与斜体一起更新。
+    pub fn token_font(&self, kind: TokenKind) -> FontKind {
+        if self.syntax_italic.contains(&kind) {
+            FontKind::MonoItalic
+        } else {
+            FontKind::Mono
         }
     }
 

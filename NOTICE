@@ -9,6 +9,22 @@ Source: https://github.com/DEEIX-AI/Winc
 
 Third-party components
 
+The OneDark Pro Italic Vivid theme is adapted from the user-supplied
+theme.json, based on One Dark Pro (https://github.com/Binaryify/OneDark-Pro).
+One Dark Pro is used under the MIT License reproduced below:
+
+Copyright (c) 2013-2022 Binaryify
+
+The Catppuccin Latte theme is adapted from Catppuccin for VS Code 3.18.1
+(https://github.com/catppuccin/vscode), under the MIT License reproduced below:
+
+Copyright (c) 2021 Catppuccin
+
+The Atom One Light theme is adapted from Atom One Light for VS Code 2.3.0
+(https://github.com/akamud/vscode-theme-onelight), under the MIT License below:
+
+Copyright (c) 2015 Mahmoud Ali
+
 Windows builds include conpty.dll and OpenConsole.exe from Windows Terminal
 (https://github.com/microsoft/terminal), used under the MIT License:
 

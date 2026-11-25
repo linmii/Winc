@@ -472,7 +472,7 @@ fn theme_colors(p: &Palette) -> Theme {
         *slot = rgb(color);
     }
     Theme {
-        fg: rgb(p.syntax_text),
+        fg: rgb(p.terminal_text),
         bg: rgb(p.editor_bg),
         cursor: rgb(p.caret),
         palette,

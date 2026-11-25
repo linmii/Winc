@@ -20,14 +20,6 @@ pub(super) fn draw_deleted_mark(
     }
 }
 
-/// 返回代码中 `kind` 类文字使用的字体：注释用斜体，其余用正体。
-fn token_font(kind: TokenKind) -> FontKind {
-    match kind {
-        TokenKind::Comment => FontKind::MonoItalic,
-        _ => FontKind::Mono,
-    }
-}
-
 /// 绘制自动换行时一行中的一段（`range` 范围内的字符），从第 `start` 格开始（后续各段先留出缩进），
 /// 返回绘制结束时的格数。
 pub(super) fn draw_glyph_run(
@@ -61,7 +53,7 @@ pub(super) fn draw_glyph_run(
             .get(token)
             .filter(|t| t.start <= col)
             .map_or(TokenKind::Text, |t| t.kind);
-        let font = (token_font(kind), app.fonts.code, cell);
+        let font = (app.editor_token_font(kind), app.fonts.code, cell);
         let (at, color) = ((x, baseline), p.token(kind));
         joined = col + draw_grid_char(frame, font, at, (chars, col), color, clip);
     }
@@ -141,7 +133,7 @@ pub(in crate::view) fn draw_whitespace_mark(
     const DOT: f32 = 2.0;
     /// 制表符箭头两端的留白（逻辑像素）。
     const TAB_PAD: f32 = 2.0;
-    let color = app.palette.indent_guide_active;
+    let color = app.palette.whitespace;
     let mid = y + app.fonts.line_height / 2.0;
     if c == ' ' {
         let dot = Rect::new(x + width / 2.0 - DOT / 2.0, mid - DOT / 2.0, DOT, DOT);
@@ -211,7 +203,7 @@ pub(in crate::view) fn draw_glyphs(
             .get(token)
             .filter(|t| t.start <= col)
             .map_or(TokenKind::Text, |t| t.kind);
-        let font = (token_font(kind), app.fonts.code, cell);
+        let font = (app.editor_token_font(kind), app.fonts.code, cell);
         let (at, color) = ((x, baseline), p.token(kind));
         joined = col + draw_grid_char(frame, font, at, (chars, col), color, clip);
     }

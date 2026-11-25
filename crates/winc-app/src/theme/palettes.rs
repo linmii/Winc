@@ -444,6 +444,8 @@ impl ThemeEntry {
             "paper" => t!("settings-theme-name-paper"),
             "vermilion" => t!("settings-theme-name-vermilion"),
             "mist" => t!("settings-theme-name-mist"),
+            "catppuccin-latte" => t!("settings-theme-name-catppuccin-latte"),
+            "atom-one-light" => t!("settings-theme-name-atom-one-light"),
             "veil-snow" => t!("settings-theme-name-veil-snow"),
             "veil-linen" => t!("settings-theme-name-veil-linen"),
             "winc-night" => t!("settings-theme-name-winc-night"),
@@ -452,6 +454,7 @@ impl ThemeEntry {
             "ember" => t!("settings-theme-name-ember"),
             "midnight" => t!("settings-theme-name-midnight"),
             "dusk" => t!("settings-theme-name-dusk"),
+            "one-dark-pro-italic-vivid" => t!("settings-theme-name-one-dark-pro"),
             "veil-night" => t!("settings-theme-name-veil-night"),
             "veil-umber" => t!("settings-theme-name-veil-umber"),
             id => id,
@@ -464,25 +467,28 @@ const fn entry(id: &'static str, palette: &'static Palette) -> ThemeEntry {
 }
 
 /// 可选的浅色主题，第一个是默认的：Winc 系列排在前面，为背景图设计的「幕」系列排在最后。
-pub static LIGHT_THEMES: [ThemeEntry; 8] = [
+pub static LIGHT_THEMES: [ThemeEntry; 10] = [
     entry("winc-day", &WINC_DAY),
     entry("winc-paper", &WINC_PAPER),
     entry("sky", &LIGHT),
     entry("paper", &PAPER),
     entry("vermilion", &VERMILION),
     entry("mist", &MIST),
+    entry("catppuccin-latte", &CATPPUCCIN_LATTE),
+    entry("atom-one-light", &ATOM_ONE_LIGHT),
     entry("veil-snow", &VEIL_SNOW),
     entry("veil-linen", &VEIL_LINEN),
 ];
 
 /// 可选的深色主题，第一个是默认的：Winc 系列排在前面，为背景图设计的「幕」系列排在最后。
-pub static DARK_THEMES: [ThemeEntry; 8] = [
+pub static DARK_THEMES: [ThemeEntry; 9] = [
     entry("winc-night", &WINC_NIGHT),
     entry("winc-slate", &WINC_SLATE),
     entry("ink", &DARK),
     entry("ember", &EMBER),
     entry("midnight", &MIDNIGHT),
     entry("dusk", &DUSK),
+    entry("one-dark-pro-italic-vivid", &ONE_DARK_PRO),
     entry("veil-night", &VEIL_NIGHT),
     entry("veil-umber", &VEIL_UMBER),
 ];

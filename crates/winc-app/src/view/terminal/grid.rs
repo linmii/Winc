@@ -41,13 +41,13 @@ impl Colors {
         if self.reverse {
             self.p.editor_bg
         } else {
-            self.p.syntax_text
+            self.p.terminal_text
         }
     }
 
     pub(super) fn default_bg(&self) -> Color {
         if self.reverse {
-            self.p.syntax_text
+            self.p.terminal_text
         } else {
             self.p.editor_bg
         }

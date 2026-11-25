@@ -26,6 +26,8 @@ pub struct Config {
     ///
     /// 可用范围见 [`Config::EDITOR_SIZE_RANGE`]。
     pub editor_size: Option<f32>,
+    /// 代码关键字是否使用斜体；未设置时跟随当前主题，其余语法类别保持主题样式。
+    pub editor_keyword_italic: Option<bool>,
     /// 界面字体（文件树、标签、状态栏）。
     pub ui_font: Option<String>,
     /// 界面字号（点）。

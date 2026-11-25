@@ -155,6 +155,7 @@ impl SettingsPage {
                     t!("settings-group-display"),
                     vec![
                         S::LineNumbers,
+                        S::KeywordItalic,
                         S::WordWrap,
                         S::Minimap,
                         S::StickyScroll,

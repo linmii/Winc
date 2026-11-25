@@ -108,6 +108,7 @@ impl App {
 
     /// 重新找出取值与默认不同的设置项（`SettingsState::changed`）：写在配置文件里，并且去掉
     /// 这一项后取值会变的。
+    /// 默认值随主题变化的关键字斜体例外：任何显式覆盖都允许恢复跟随主题。
     pub(in crate::app) fn refresh_changed_settings(&mut self) {
         let modules = crate::layout::Modules {
             git: true,
@@ -124,7 +125,8 @@ impl App {
             let written = std::mem::replace(&mut self.config, plain);
             let default = self.setting_shown(setting);
             self.config = written;
-            if now != default {
+            // 关键字斜体的默认值随主题变化；显式设置即使与当前主题一致，也应能恢复跟随主题。
+            if now != default || setting == Setting::KeywordItalic {
                 changed.push(setting);
             }
         }

@@ -127,6 +127,7 @@ const EDITOR: &[Field] = &[
         },
         write: |config| config.editor_size.map(number),
     },
+    bool_field!("keywordItalic", editor_keyword_italic),
     Field {
         key: "tabWidth",
         read: |config, value, name, problems| {

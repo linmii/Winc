@@ -140,7 +140,7 @@ fn draw_dialog(app: &mut App, frame: &mut Frame<'_>, layout: &SettingsLayout) {
 
 /// 绘制分类栏顶部的搜索框，返回其中光标的矩形。
 ///
-/// 样式与「快捷键」页的搜索框相同：编辑区底色，有焦点时外圈为强调色，没有焦点时一圈细边，
+/// 样式与「快捷键」页的搜索框相同：主题输入框底色，有焦点时外圈为强调色，没有焦点时一圈细边，
 /// 左侧是放大镜图标。
 fn draw_search(app: &mut App, frame: &mut Frame<'_>, layout: &SettingsLayout) -> Option<Rect> {
     let p = app.palette;
@@ -149,7 +149,7 @@ fn draw_search(app: &mut App, frame: &mut Frame<'_>, layout: &SettingsLayout) ->
     if focused {
         frame.rounded(search.inset(-1.5, -1.5), p.accent, RADIUS_ROW + 1.5);
     }
-    frame.rounded(search, p.editor_bg, RADIUS_ROW);
+    frame.rounded(search, p.input_bg.unwrap_or(p.editor_bg), RADIUS_ROW);
     if !focused {
         keys::outline(frame, p.border, search);
     }
@@ -781,7 +781,7 @@ fn draw_field(app: &mut App, frame: &mut Frame<'_>, row: &SettingRow, clip: Rect
             p.accent
         };
         frame.rect_clipped(rect.inset(-1.5, -1.5), ring, RADIUS_ROW + 1.5, clip);
-        frame.rect_clipped(rect, p.editor_bg, RADIUS_ROW, clip);
+        frame.rect_clipped(rect, p.input_bg.unwrap_or(p.editor_bg), RADIUS_ROW, clip);
 
         let focused = app.focus == Focus::Setting;
         let (setting, mut field) = app.settings.editing.take().expect("刚刚判断过在编辑");

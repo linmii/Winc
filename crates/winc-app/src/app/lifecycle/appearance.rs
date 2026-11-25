@@ -1,8 +1,19 @@
 //! 外观：界面缩放、字体、字号和主题。
 
 use super::*;
+use winc_syntax::TokenKind;
 
 impl App {
+    /// 编辑区语法字体：用户的关键字斜体偏好优先，其余类别由主题决定。
+    /// 普通行、自动换行、粘滞标题和差异视图共用此入口，切换时无需重做语法分析。
+    pub(crate) fn editor_token_font(&self, kind: TokenKind) -> FontKind {
+        match (kind, self.config.editor_keyword_italic) {
+            (TokenKind::Keyword, Some(true)) => FontKind::MonoItalic,
+            (TokenKind::Keyword, Some(false)) => FontKind::Mono,
+            _ => self.palette.token_font(kind),
+        }
+    }
+
     /// 返回界面缩放倍数（配置中的 `ui.zoom` 除以 100，未设置时为 1）。
     pub(crate) fn zoom(&self) -> f32 {
         f32::from(self.config.ui_zoom.unwrap_or(100)) / 100.0

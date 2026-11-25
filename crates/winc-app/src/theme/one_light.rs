@@ -1,0 +1,108 @@
+//! Atom One Light：近白编辑区、浅灰窗框，搭配蓝色函数与紫色关键字。
+//!
+//! 按上游 VS Code 主题 2.3.0 适配；语法与注释为 Winc 的浅色对比度要求加深，见 `THEMES.md`。
+
+use super::palettes::hex;
+use super::*;
+
+const BACKGROUND: Color = hex(0xFAFAFA);
+
+/// Atom One Light 的完整界面、语法和终端配色。
+pub static ATOM_ONE_LIGHT: Palette = Palette {
+    sidebar_bg: hex(0xEAEAEB),
+    tab_fill: BACKGROUND,
+    tab_edge: hex(0xDBDBDC),
+    tab_divider: hex(0xDBDBDC),
+    group_bg: BACKGROUND,
+    input_bg: Some(hex(0xFFFFFF)),
+    border: hex(0xDBDBDC),
+    popup_border: hex(0xDBDBDC),
+    hover: hex(0xDBDBDC).alpha(0.4),
+    selected: hex(0xDBDBDC),
+    selected_inactive: hex(0xDBDBDC),
+    selected_unfocused: hex(0xDBDBDC),
+    separator: hex(0xDBDBDC),
+    current_line: hex(0x383A42).alpha(12.0 / 255.0),
+    selection_inactive: hex(0xE5E5E6),
+    caret: hex(0x526FFF),
+    indent_guide: hex(0x383A42).alpha(0.2),
+    indent_guide_active: hex(0x626772),
+    whitespace: hex(0x383A42).alpha(0.2),
+    search_match: hex(0x526FFF).alpha(0.2),
+    // 上游未单列当前结果，用同色更深的底区分正在查看的匹配。
+    search_current: hex(0x526FFF).alpha(0.35),
+    match_brace: hex(0x383A42).alpha(0.1),
+    occurrence: hex(0x526FFF).alpha(0.15),
+    scrollbar: hex(0x4E5666).alpha(128.0 / 255.0),
+    scrollbar_active: hex(0x747D91).alpha(128.0 / 255.0),
+    ruler_occurrence: hex(0x383A42).alpha(0.2),
+    ruler_caret: hex(0x526FFF),
+    drop_target: hex(0x526FFF).alpha(0.2),
+    modified_dot: hex(0x986801),
+    diff_added: DiffShade {
+        word: mix(hex(0x00809B), BACKGROUND, 0.2),
+        ..shade(hex(0x50A14F), BACKGROUND, false)
+    },
+    diff_deleted: shade(hex(0xE45649), BACKGROUND, false),
+    syntax_variable: hex(0xA53E34),
+    syntax_type: hex(0x815800),
+    syntax_escape: hex(0x006692),
+    syntax_tag: hex(0xA53E34),
+    syntax_attribute: hex(0x815800),
+    syntax_heading: hex(0xA53E34),
+    syntax_emphasis: hex(0xA325A1),
+    syntax_strong: hex(0x815800),
+    syntax_link: hex(0x305BB9),
+    syntax_inserted: hex(0x356C35),
+    syntax_deleted: hex(0xA53E34),
+    syntax_warning: hex(0x815800),
+    syntax_italic: &[TokenKind::Comment, TokenKind::Emphasis],
+    terminal_text: hex(0x383A42),
+    ..Palette::build(Tokens {
+        dark: false,
+        frame: hex(0xEAEAEB),
+        card: BACKGROUND,
+        popup: hex(0xEAEAEB),
+        text: hex(0x383A42),
+        text_muted: hex(0x626772),
+        text_dim: hex(0x727377),
+        accent: hex(0x526FFF),
+        accent_fill: hex(0x5871EF),
+        selection: hex(0xE5E5E6),
+        gutter: [hex(0x919193), hex(0x383A42)],
+        error: hex(0xE45649),
+        warning: hex(0x986801),
+        git: [hex(0x4078F2), hex(0x50A14F), hex(0xE45649), hex(0x986801)],
+        tinted_tab: false,
+        syntax: [
+            hex(0x383A42),
+            hex(0xA325A1),
+            hex(0x006692),
+            hex(0x356C35),
+            hex(0x815800),
+            hex(0x727377),
+            hex(0x305BB9),
+            hex(0x815800),
+            hex(0xA53E34),
+        ],
+        // 上游未定义 ANSI 色；用同系语法色补齐，并满足终端 3:1 的对比度要求。
+        ansi: [
+            hex(0x383A42),
+            hex(0xE45649),
+            hex(0x50A14F),
+            hex(0xC18401),
+            hex(0x4078F2),
+            hex(0xA626A4),
+            hex(0x0184BC),
+            hex(0x696C77),
+            hex(0x80838C),
+            hex(0xCA1243),
+            hex(0x3E953A),
+            hex(0x986801),
+            hex(0x2F5BBB),
+            hex(0x8B2A8A),
+            hex(0x016693),
+            hex(0xC8C8CA),
+        ],
+    })
+};

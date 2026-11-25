@@ -49,11 +49,12 @@ fn search_finds_settings_on_every_page() {
     search(&mut app, "LINT");
     assert_eq!(listed(&app).0, [Setting::FixOnSave]);
 
-    // 主题的各项都在「外观」之下。
+    // 主题选择在「外观」，跟随主题的关键字斜体在「编辑器」。
     search(&mut app, "主题");
     let (rows, titles) = listed(&app);
     assert!(rows.contains(&Setting::LightTheme) && rows.contains(&Setting::DarkTheme));
-    assert_eq!(titles, ["外观"]);
+    assert!(rows.contains(&Setting::KeywordItalic));
+    assert_eq!(titles, ["外观", "编辑器"]);
 
     // 组标题也参与匹配：按「Vim」一次搜到这一组的全部设置项。
     search(&mut app, "vim");

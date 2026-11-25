@@ -362,6 +362,216 @@ fn only_a_theme_following_the_system_changes_with_it() {
     assert!(!app.palette.dark);
 }
 
+#[test]
+fn custom_themes_are_saved_and_restored_across_appearance_changes() {
+    use crate::theme::{ATOM_ONE_LIGHT, CATPPUCCIN_LATTE, ONE_DARK_PRO, theme_index};
+    use winc_syntax::TokenKind;
+
+    for (id, palette, styled_token) in [
+        (
+            "one-dark-pro-italic-vivid",
+            &ONE_DARK_PRO,
+            TokenKind::Keyword,
+        ),
+        ("catppuccin-latte", &CATPPUCCIN_LATTE, TokenKind::Function),
+        ("atom-one-light", &ATOM_ONE_LIGHT, TokenKind::Emphasis),
+    ] {
+        let dark = palette.dark;
+        let (choice, other_choice, system, other_system, setting) = if dark {
+            (
+                ThemeChoice::Dark,
+                ThemeChoice::Light,
+                Theme::Dark,
+                Theme::Light,
+                Setting::DarkTheme,
+            )
+        } else {
+            (
+                ThemeChoice::Light,
+                ThemeChoice::Dark,
+                Theme::Light,
+                Theme::Dark,
+                Setting::LightTheme,
+            )
+        };
+        let dir = sample_folder(&format!("settings-{id}"));
+        let config_path = dir.join("config.json");
+        let mut app = app_with(&dir.join("short.rs"), !dark);
+        app.store.config_path = Some(config_path.clone());
+        app.set_theme_choice(choice);
+        app.show_setting(setting);
+        paint(&mut app);
+        // 通过主题卡片选择，连同新增行的命中区域一并验证。
+        click_part(
+            &mut app,
+            SettingsPart::NamedTheme(dark, theme_index(dark, Some(id))),
+        );
+        assert!(std::ptr::eq(app.palette, palette), "{id}");
+        assert_eq!(app.palette.token_font(styled_token), FontKind::MonoItalic);
+
+        let (saved, problems) = Config::load_from(&config_path);
+        assert!(problems.is_empty(), "{id}: {problems:?}");
+        let (selected, other) = if dark {
+            (&saved.dark_theme, &saved.light_theme)
+        } else {
+            (&saved.light_theme, &saved.dark_theme)
+        };
+        assert_eq!(selected.as_deref(), Some(id));
+        assert!(other.is_none(), "{id}: 不应修改另一种外观的主题");
+        assert_eq!(saved.theme, Some(choice));
+
+        // 重新载入配置，并跨越浅/深色切换；斜体随所选配色恢复，不污染其他主题。
+        let mut reopened = app_with(&dir.join("short.rs"), !dark);
+        reopened.config = saved;
+        reopened.set_theme_choice(other_choice);
+        assert_eq!(reopened.palette.token_font(styled_token), FontKind::Mono);
+        reopened.set_theme_choice(choice);
+        assert!(std::ptr::eq(reopened.palette, palette), "{id}");
+        assert_eq!(
+            reopened.palette.token_font(styled_token),
+            FontKind::MonoItalic
+        );
+        reopened.show_setting(setting);
+        paint(&mut reopened);
+        let search = reopened.settings_layout().search;
+        let background = pixel(&reopened, (search.right() - 8.0, search.y + search.h / 2.0));
+        assert!(near(background, palette.input_bg.unwrap()), "{id}");
+        reopened.set_theme_choice(ThemeChoice::Auto);
+        reopened.system_theme_changed(other_system);
+        reopened.system_theme_changed(system);
+        assert!(std::ptr::eq(reopened.palette, palette), "{id}");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[test]
+fn keyword_italics_can_override_the_theme_and_reset() {
+    use crate::theme::theme_index;
+    use winc_syntax::TokenKind;
+
+    let dir = sample_folder("settings-keyword-italic");
+    let path = dir.join("keywords.rs");
+    // 足够长的一行，确保同时检查普通行和自动换行的字形绘制路径。
+    std::fs::write(
+        &path,
+        format!(
+            "// Keep comments italic.\npub fn main() {{ {} }}\n",
+            "let value = 42; ".repeat(24)
+        ),
+    )
+    .unwrap();
+    let config_path = dir.join("config.json");
+    let setting = Setting::KeywordItalic;
+    let mut app = app_with(&path, true);
+    app.store.config_path = Some(config_path.clone());
+    app.config.ui_animations = Some(false);
+    app.set_theme_choice(ThemeChoice::Dark);
+    app.set_named_theme(true, theme_index(true, Some("one-dark-pro-italic-vivid")));
+    assert!(app.switch_on(setting));
+    assert!(!app.setting_is_set(setting));
+    app.show_setting(setting);
+    paint(&mut app);
+    click_part(&mut app, SettingsPart::Switch(setting));
+    assert!(!app.switch_on(setting));
+    assert_eq!(app.editor_token_font(TokenKind::Keyword), FontKind::Mono);
+    assert_eq!(
+        app.editor_token_font(TokenKind::Comment),
+        FontKind::MonoItalic
+    );
+    assert_eq!(
+        app.editor_token_font(TokenKind::Attribute),
+        FontKind::MonoItalic
+    );
+
+    let (saved, problems) = Config::load_from(&config_path);
+    assert!(problems.is_empty(), "{problems:?}");
+    assert_eq!(saved.editor_keyword_italic, Some(false));
+    let mut reopened = app_with(&path, true);
+    reopened.adopt_config(saved);
+    assert!(!reopened.switch_on(setting));
+    reopened.set_theme_choice(ThemeChoice::Light);
+    assert!(!reopened.switch_on(setting));
+    reopened.set_theme_choice(ThemeChoice::Dark);
+    assert!(!reopened.switch_on(setting));
+
+    // 再次开启即使与主题默认一致，也要保留恢复默认入口，以便取消跨主题的覆盖。
+    click_part(&mut app, SettingsPart::Switch(setting));
+    assert_eq!(app.config.editor_keyword_italic, Some(true));
+    assert!(app.settings.changed.contains(&setting));
+    app.set_theme_choice(ThemeChoice::Light);
+    assert!(app.switch_on(setting));
+    paint(&mut app);
+    click_part(&mut app, SettingsPart::Reset(setting));
+    assert_eq!(app.config.editor_keyword_italic, None);
+    assert!(!app.switch_on(setting));
+    assert_eq!(
+        Config::load_from(&config_path).0.editor_keyword_italic,
+        None
+    );
+    app.set_theme_choice(ThemeChoice::Dark);
+    assert!(app.switch_on(setting));
+    app.close_settings();
+
+    // 比较实际像素，避免只验证设置值却遗漏某条渲染路径。
+    for wrap in [false, true] {
+        app.config.word_wrap = Some(wrap);
+        app.word_wrap_changed();
+        app.config.editor_keyword_italic = Some(false);
+        paint(&mut app);
+        let upright = app
+            .frame
+            .renderer
+            .as_ref()
+            .unwrap()
+            .image()
+            .unwrap()
+            .pixels
+            .clone();
+        app.config.editor_keyword_italic = Some(true);
+        paint(&mut app);
+        let italic = &app.frame.renderer.as_ref().unwrap().image().unwrap().pixels;
+        assert!(
+            &upright != italic,
+            "关键字字形应随开关变化，自动换行：{wrap}"
+        );
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// 新主题的编辑区与设置截图，供检查中文、斜体、背景层次和主题选择入口。
+#[test]
+#[ignore = "截图，手动运行"]
+fn shoot_custom_themes() {
+    let dir = search_folder("shoot-custom-themes");
+    std::fs::write(
+        dir.join("src/main.rs"),
+        "use std::collections::HashMap;\n\n/// 缓存用户名称 / Cache user names.\n#[derive(Debug, Default)]\npub struct Cache {\n    users: HashMap<String, u32>,\n    hits: usize,\n}\n\nimpl Cache {\n    pub fn find(&mut self, name: &str) -> Option<u32> {\n        // 比较关键字、类型、函数与字符串的配色\n        let message = \"Hello, Winc!\\n\";\n        let count = 42;\n        if let Some(id) = self.users.get(name) {\n            self.hits += 1;\n            return Some(*id);\n        }\n        None\n    }\n}\n",
+    )
+    .unwrap();
+    for (id, dark) in [
+        ("one-dark-pro-italic-vivid", true),
+        ("catppuccin-latte", false),
+        ("atom-one-light", false),
+    ] {
+        let mut app = app_with(&dir, dark);
+        app.open_path(&dir.join("src/main.rs"));
+        app.set_named_theme(dark, crate::theme::theme_index(dark, Some(id)));
+        shoot(&mut app, &format!("{id}-editor"));
+        app.show_setting(if dark {
+            Setting::DarkTheme
+        } else {
+            Setting::LightTheme
+        });
+        shoot(&mut app, &format!("{id}-settings"));
+        if dark {
+            app.show_setting(Setting::KeywordItalic);
+            shoot(&mut app, "keyword-italic-settings");
+        }
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// 各档字重的截图：`cargo test -p winc-app shoot_font_weights -- --ignored`。
 #[test]
 #[ignore = "截图，手动运行"]
