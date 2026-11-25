@@ -1,7 +1,7 @@
 {
   "id": "winc.remove-duplicate-lines",
   "name": "去除重复行 / Remove Duplicate Lines",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "api_version": 1,
   "commands": [
     {

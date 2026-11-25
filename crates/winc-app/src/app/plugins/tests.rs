@@ -130,6 +130,32 @@ fn plugin_command_transforms_and_undoes_the_document() {
 }
 
 #[test]
+fn empty_lines_collapse_to_one_editor_line_and_can_be_undone() {
+    for ending in ["\n", "\r\n", "\r"] {
+        for select_all in [false, true] {
+            let original = ending.repeat(3);
+            let (mut app, _dir, action) = test_app(&original);
+            if select_all {
+                app.editor
+                    .active_mut()
+                    .unwrap()
+                    .set_selections(vec![Selection::new(0, original.chars().count())], 0);
+            }
+            assert!(app.run_action(action));
+            assert_eq!(text(&app), "");
+            assert_eq!(app.editor.active().unwrap().text().line_count(), 1);
+            // 对空文档再次运行不增加撤销步骤，一次撤销就能恢复原来的空行。
+            assert!(app.run_action(action));
+            assert_eq!(text(&app), "");
+            app.run(Command::Undo);
+            assert_eq!(text(&app), original);
+            app.run(Command::Redo);
+            assert_eq!(text(&app), "");
+        }
+    }
+}
+
+#[test]
 fn only_selected_text_changes_and_multiselections_undo_as_one_step() {
     let original = "前\na\na\n中\nb\nb\n后";
     let (mut app, _dir, action) = test_app(original);

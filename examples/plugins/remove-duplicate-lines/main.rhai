@@ -1,4 +1,4 @@
-// Preserve the first occurrence, its original whitespace and the input's final newline.
+// Preserve the first occurrence, its whitespace and the final newline for nonempty output.
 let normalized = text;
 normalized.replace("\r\n", "\n");
 normalized.replace("\r", "\n");
@@ -23,5 +23,6 @@ for line in output {
     first = false;
     result += line;
 }
-if trailing { result += line_ending; }
+// Empty text already displays as one blank line; a newline would create a second one.
+if trailing && result != "" { result += line_ending; }
 result

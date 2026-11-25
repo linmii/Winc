@@ -60,6 +60,15 @@ fn example_deduplicates_unicode_and_preserves_line_endings_and_empty_lines() {
         ("a\rb\ra\r", "a\rb\r", "\r"),
         ("\n\na\na\n", "\na\n", "\n"),
         ("", "", "\n"),
+        // 只有空行时返回空文本，否则一个末尾换行仍会显示成两行。
+        ("\n", "", "\n"),
+        ("\n\n\n", "", "\n"),
+        ("\r\n\r\n\r\n", "", "\r\n"),
+        ("\r\r\r", "", "\r"),
+        ("\r\n\n\r", "", "\r\n"),
+        // 普通文本和含空格的行继续保留原来的末尾换行语义。
+        ("a\n\n\n", "a\n\n", "\n"),
+        (" \n \n", " \n", "\n"),
         ("a\nA\n a ", "a\nA\n a ", "\n"),
     ] {
         assert_eq!(
