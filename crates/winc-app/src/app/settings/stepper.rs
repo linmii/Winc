@@ -29,6 +29,30 @@ fn step_weight(current: u16, up: bool, range: RangeInclusive<f32>) -> u16 {
 }
 
 impl App {
+    /// 手动输入只接受 1–100 的整数；加减按钮仍可按原来的规则减到 0 来隐藏背景图。
+    pub(super) fn settings_commit_opacity(&mut self, text: &str) {
+        let value = text
+            .parse::<u8>()
+            .ok()
+            .filter(|value| (1..=100).contains(value));
+        let Some(value) = value else {
+            self.settings.error = Some((
+                Setting::BackgroundOpacity,
+                t!("settings-background-opacity-invalid").to_owned(),
+            ));
+            self.request_redraw();
+            return;
+        };
+
+        self.config.ui_background_opacity = Some(f32::from(value));
+        self.settings.editing = None;
+        self.settings.editing_original = None;
+        self.settings.error = None;
+        self.focus = Focus::Settings;
+        self.save_config();
+        self.request_redraw();
+    }
+
     /// 返回数值设置当前的显示值，以及是否已到范围的下限、上限（到限的一侧按钮变淡）。
     pub(crate) fn setting_value(&self, setting: Setting) -> (String, bool, bool) {
         let (value, range) = match setting {
@@ -104,6 +128,9 @@ impl App {
                     (self.config.ui_background_opacity).unwrap_or(Config::BACKGROUND_OPACITY);
                 let next = current + if up { OPACITY_STEP } else { -OPACITY_STEP };
                 self.config.ui_background_opacity = Some(next.clamp(*range.start(), *range.end()));
+                if matches!(&self.settings.error, Some((Setting::BackgroundOpacity, _))) {
+                    self.settings.error = None;
+                }
             }
             // 只改字号，无需重新加载字体。
             Setting::TerminalSize => {

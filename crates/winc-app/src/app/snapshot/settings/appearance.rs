@@ -377,6 +377,133 @@ fn shoot_font_weights() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+#[test]
+fn background_opacity_accepts_typed_values_and_keeps_five_point_buttons() {
+    let dir = sample_folder("settings-opacity-input");
+    let mut app = app_with(&dir.join("short.rs"), false);
+    let setting = Setting::BackgroundOpacity;
+    let config_path = dir.join("config.json");
+    app.store.config_path = Some(config_path.clone());
+    let editor_font = app.config.editor_font.clone();
+    app.show_setting(setting);
+    paint(&mut app);
+
+    let (x, y) = settings_point(&app, SettingsPart::Field(setting));
+    assert_eq!(
+        app.settings_part_at(x, y),
+        Some(SettingsPart::Field(setting))
+    );
+    click(&mut app, (x, y));
+    assert_eq!(app.focus, Focus::Setting);
+    assert_eq!(
+        app.settings.editing.as_ref().unwrap().1.selected_text(),
+        "15"
+    );
+    paint(&mut app);
+    let parts = StepperParts::new(app.settings_layout().row(setting).unwrap().control);
+    let field = &app.settings.editing.as_ref().unwrap().1;
+    assert!(field.view.area.x >= parts.value.x);
+    assert!(field.view.area.right() <= parts.value.right());
+
+    app.edit_field(|field| field.insert("17"));
+    assert_eq!(app.config.ui_background_opacity, None, "确认前不改配置");
+    app.settings_commit_field();
+    assert_eq!(app.config.ui_background_opacity, Some(17.0));
+    assert!(app.settings.editing.is_none());
+    assert_eq!(app.focus, Focus::Settings);
+    let (saved, problems) = Config::load_from(&config_path);
+    assert!(problems.is_empty(), "{problems:?}");
+    assert_eq!(saved.ui_background_opacity, Some(17.0));
+    assert_eq!(
+        app.config.editor_font, editor_font,
+        "数值输入不能改动字体设置"
+    );
+
+    click_part(&mut app, SettingsPart::Increase(setting));
+    assert_eq!(app.config.ui_background_opacity, Some(22.0));
+    click_part(&mut app, SettingsPart::Decrease(setting));
+    assert_eq!(app.config.ui_background_opacity, Some(17.0));
+
+    // 点击加减按钮前，先确认输入的数值，再从该数值调整 5。
+    click_part(&mut app, SettingsPart::Field(setting));
+    app.edit_field(|field| field.insert("23"));
+    click_part(&mut app, SettingsPart::Increase(setting));
+    assert_eq!(app.config.ui_background_opacity, Some(28.0));
+    assert!(app.settings.editing.is_none());
+
+    for value in [1, 99, 100] {
+        app.settings_activate();
+        assert_eq!(app.focus, Focus::Setting, "键盘也能进入数值输入");
+        app.edit_field(|field| field.insert(&value.to_string()));
+        app.settings_commit_field();
+        assert_eq!(app.config.ui_background_opacity, Some(value as f32));
+    }
+    click_part(&mut app, SettingsPart::Increase(setting));
+    assert_eq!(app.config.ui_background_opacity, Some(100.0));
+    app.settings_activate();
+    app.edit_field(|field| field.insert("1"));
+    app.settings_commit_field();
+    click_part(&mut app, SettingsPart::Decrease(setting));
+    assert_eq!(app.config.ui_background_opacity, Some(0.0));
+    click_part(&mut app, SettingsPart::Increase(setting));
+    assert_eq!(app.config.ui_background_opacity, Some(5.0));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn background_opacity_rejects_invalid_input_and_can_be_cancelled() {
+    let dir = sample_folder("settings-opacity-invalid");
+    let mut app = app_with(&dir.join("short.rs"), false);
+    let setting = Setting::BackgroundOpacity;
+    app.config.ui_background_opacity = Some(37.0);
+    let editor_font = app.config.editor_font.clone();
+    app.show_setting(setting);
+    app.settings_activate();
+
+    for text in ["", "0", "101", "-1", "1.5", "abc", "999999999999999999999"] {
+        app.edit_field(|field| {
+            field.select_all();
+            field.set_text(text);
+            true
+        });
+        assert!(app.settings.error.is_none());
+        app.settings_commit_field();
+        assert_eq!(app.config.ui_background_opacity, Some(37.0), "{text:?}");
+        assert_eq!(app.focus, Focus::Setting);
+        assert!(app.settings.editing.is_some());
+        assert_eq!(
+            app.settings
+                .error
+                .as_ref()
+                .map(|(s, error)| (*s, error.as_str())),
+            Some((setting, "请输入 1–100 之间的整数"))
+        );
+    }
+    paint(&mut app);
+    // 无效输入失去焦点时退回旧值，随后按钮仍可正常调整。
+    click_part(&mut app, SettingsPart::Increase(setting));
+    assert_eq!(app.config.ui_background_opacity, Some(42.0));
+    assert!(app.settings.editing.is_none());
+    assert!(app.settings.error.is_none());
+
+    app.settings_activate();
+    app.edit_field(|field| field.insert("12"));
+    app.settings_cancel_field();
+    assert_eq!(app.config.ui_background_opacity, Some(42.0));
+    assert!(app.settings.open);
+    assert_eq!(app.focus, Focus::Settings);
+    assert!(app.settings.error.is_none());
+
+    app.settings_activate();
+    app.edit_field(|field| field.insert("64"));
+    app.close_settings();
+    assert_eq!(app.config.ui_background_opacity, Some(42.0));
+    assert_eq!(app.config.editor_font, editor_font);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// 背景图片：配置后在后台生成铺满窗口（按逻辑像素）的图层，底色之下透出图片；不透明度、配色
 /// 改变后随之更新，取消后恢复纯色；无法加载的图片提示一次，不反复重试。生成好的图层写入磁盘
 /// 缓存，之后直接读取，不再解码原图。

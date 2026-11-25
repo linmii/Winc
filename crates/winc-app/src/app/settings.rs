@@ -40,7 +40,7 @@ pub struct SettingsState {
     ///
     /// 只有此时才给选中的那一行铺底色，使用鼠标时不显示。
     pub keyboard: bool,
-    /// 正在编辑字体名或格式化命令时，对应的设置项和输入框的当前内容。
+    /// 正在编辑字体名、格式化命令或数值时，对应的设置项和输入框的当前内容。
     pub editing: Option<(Setting, TextField)>,
     /// 开始编辑前的字体设置；按 `Esc` 或关闭浮层时退回该值。
     pub editing_original: Option<String>,
@@ -778,6 +778,9 @@ impl App {
 
         match setting.control() {
             SettingControl::Font => self.settings_start_editing(setting),
+            SettingControl::Stepper if setting == Setting::BackgroundOpacity => {
+                self.settings_start_editing(setting)
+            }
             SettingControl::Switch => self.settings_toggle(setting),
             SettingControl::Command
             | SettingControl::Action
@@ -792,7 +795,7 @@ impl App {
         }
     }
 
-    /// 开始编辑字体名或格式化命令：输入框中是当前的设置并全选，直接键入即替换。
+    /// 开始编辑设置值：输入框中是当前的设置并全选，直接键入即替换。
     pub(super) fn settings_start_editing(&mut self, setting: Setting) {
         if matches!(&self.settings.editing, Some((s, _)) if *s == setting) {
             self.focus = Focus::Setting;
@@ -806,6 +809,7 @@ impl App {
             None if setting == Setting::TerminalShell => self.config.terminal_shell.clone(),
             None if setting == Setting::GitPath => self.config.git_path.clone(),
             None if setting == Setting::LatexPath => self.config.latex_path.clone(),
+            None if setting == Setting::BackgroundOpacity => Some(self.setting_value(setting).0),
             None => self.font_setting(setting).clone(),
         };
         let mut field = TextField::default();
@@ -856,11 +860,11 @@ impl App {
         }
     }
 
-    /// 离开正在编辑的输入框：先提交；字体名不对时放弃本次输入，字体设置退回开始编辑前的值，
+    /// 离开正在编辑的输入框：先提交；输入无效时放弃本次输入，保留原设置，
     /// 出错原因仍显示在该行。
     ///
-    /// 换页、点击其他控件、按 `Tab` 时调用，不会因为名字不对而把用户困在输入框中；只有按 `↩`
-    /// 提交时，名字不对才停留在输入框里。
+    /// 换页、点击其他控件、按 `Tab` 时调用，不会因为输入无效而把用户困在输入框中；只有按 `↩`
+    /// 提交时，输入无效才停留在输入框里。
     pub(super) fn settings_leave_field(&mut self) {
         if self.settings.editing.is_none() {
             return;
@@ -881,6 +885,11 @@ impl App {
         };
 
         let setting = *setting;
+        // 数值在确认后才应用；继续输入时先清除上一次校验的错误。
+        if setting == Setting::BackgroundOpacity {
+            self.settings.error = None;
+            return;
+        }
         if setting.control() != SettingControl::Font {
             return;
         }
@@ -891,7 +900,7 @@ impl App {
 
     /// 放弃编辑：字体设置退回开始编辑前的值（键入过程中配置已被改为中间状态）。
     ///
-    /// 格式化命令在键入时不改配置，因此不需要退回。
+    /// 格式化命令和数值在键入时不改配置，因此不需要退回。
     pub(super) fn settings_cancel_field(&mut self) {
         let Some((setting, _)) = self.settings.editing.take() else {
             return;
@@ -910,7 +919,7 @@ impl App {
         self.request_redraw();
     }
 
-    /// 提交正在编辑的字体名或命令。
+    /// 提交正在编辑的字体名、命令或数值。
     pub(super) fn settings_commit_field(&mut self) {
         let Some((setting, field)) = self.settings.editing.as_ref() else {
             return;
@@ -920,6 +929,9 @@ impl App {
 
         match tool_setting(setting) {
             Some((task, id)) => self.settings_commit_command(task, id, value),
+            None if setting == Setting::BackgroundOpacity => {
+                self.settings_commit_opacity(value.as_deref().unwrap_or_default());
+            }
             None if setting == Setting::TerminalShell => {
                 self.settings.editing = None;
                 self.settings.editing_original = None;

@@ -3,6 +3,7 @@
 use super::*;
 use crate::app::diff::DIFF_HSCROLL;
 use crate::app::workspace::search_dialog::DialogPart;
+use crate::layout::Setting;
 
 impl App {
     /// 把顶栏当前的命中测试区域同步给窗口过程。
@@ -946,7 +947,9 @@ impl App {
             let editing = self.settings.editing.as_ref().map(|(s, _)| *s);
             let icon = match self.settings_part_at(x, y) {
                 Some(SettingsPart::Field(s))
-                    if s.control() == SettingControl::Font || editing == Some(s) =>
+                    if s.control() == SettingControl::Font
+                        || s == Setting::BackgroundOpacity
+                        || editing == Some(s) =>
                 {
                     CursorIcon::Text
                 }

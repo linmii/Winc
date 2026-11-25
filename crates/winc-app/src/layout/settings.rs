@@ -1241,6 +1241,8 @@ impl SettingsLayout {
                     Some(SettingsPart::Decrease(row.setting))
                 } else if parts.plus.contains(x, y) {
                     Some(SettingsPart::Increase(row.setting))
+                } else if row.setting == Setting::BackgroundOpacity && parts.value.contains(x, y) {
+                    Some(SettingsPart::Field(row.setting))
                 } else {
                     None
                 }

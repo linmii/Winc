@@ -345,7 +345,7 @@ fn draw_row(app: &mut App, frame: &mut Frame<'_>, row: &SettingRow, clip: Rect) 
     let x = row.row.x + SETTINGS_INSET;
     let room = crate::layout::description_room(row.row, row.control);
     let editing = matches!(&app.settings.editing, Some((s, _)) if *s == row.setting);
-    // 字体名无法识别时，用红色小字写在输入框左侧。
+    // 输入无效时，用红色小字写在输入框左侧。
     let error = match &app.settings.error {
         Some((setting, error)) if *setting == row.setting => Some(error.clone()),
         _ => None,
@@ -387,7 +387,15 @@ fn draw_row(app: &mut App, frame: &mut Frame<'_>, row: &SettingRow, clip: Rect) 
                 }
                 // 说明按布局时的宽度折行，最后一行仍放不下时在末尾截短。
                 setting => {
-                    let text = setting.description().unwrap_or_default();
+                    let text = error
+                        .as_deref()
+                        .map(Cow::Borrowed)
+                        .unwrap_or_else(|| setting.description().unwrap_or_default());
+                    let color = if error.is_some() {
+                        p.error
+                    } else {
+                        p.text_muted
+                    };
                     let size = app.fonts.ui_small;
                     let mut measure = |s: &str| frame.measure(FontKind::Ui, size, s);
                     let lines =
@@ -401,7 +409,7 @@ fn draw_row(app: &mut App, frame: &mut Frame<'_>, row: &SettingRow, clip: Rect) 
                         };
                         let at =
                             Rect::new(x, bottom.y + i as f32 * SETTINGS_DESC_LINE, room, bottom.h);
-                        ui_text_small(frame, app, x, at, &line, p.text_muted, clip);
+                        ui_text_small(frame, app, x, at, &line, color, clip);
                     }
                 }
             }
@@ -497,10 +505,7 @@ fn draw_row(app: &mut App, frame: &mut Frame<'_>, row: &SettingRow, clip: Rect) 
             }
             None
         }
-        SettingControl::Stepper => {
-            draw_stepper(app, frame, row, clip);
-            None
-        }
+        SettingControl::Stepper => draw_stepper(app, frame, row, clip),
         SettingControl::Themes => {
             draw_mode(app, frame, row, clip);
             None
@@ -741,6 +746,7 @@ fn draw_field(app: &mut App, frame: &mut Frame<'_>, row: &SettingRow, clip: Rect
         Setting::TerminalShell => (None, t!("settings-terminal-shell-placeholder")),
         Setting::GitPath => (app.config.git_path.clone(), t!("settings-git-path-auto")),
         Setting::LatexPath => (app.config.latex_path.clone(), latex_auto.as_str()),
+        Setting::BackgroundOpacity => (Some(app.setting_value(row.setting).0), ""),
         _ => (app.config.editor_font.clone(), t!("settings-font-default")),
     };
     // 字体输入框的文字不进入右端的下拉按钮。
@@ -752,6 +758,9 @@ fn draw_field(app: &mut App, frame: &mut Frame<'_>, row: &SettingRow, clip: Rect
             (button.x - rect.x - 10.0).max(0.0),
             rect.h,
         )
+    } else if row.setting == Setting::BackgroundOpacity {
+        // 三位数的输入框只占步进器中间，给数字留足宽度。
+        rect.inset(4.0, 0.0)
     } else {
         rect.inset(10.0, 0.0)
     };
@@ -848,7 +857,12 @@ fn draw_switch(app: &App, frame: &mut Frame<'_>, row: &SettingRow, clip: Rect) {
 /// 绘制数值步进控件：「− 13 ＋」。
 ///
 /// 按钮平时没有底色，悬停时才有；到达可调范围的上下限时，对应一侧的按钮变淡。
-fn draw_stepper(app: &App, frame: &mut Frame<'_>, row: &SettingRow, clip: Rect) {
+fn draw_stepper(
+    app: &mut App,
+    frame: &mut Frame<'_>,
+    row: &SettingRow,
+    clip: Rect,
+) -> Option<Rect> {
     let p = app.palette;
     let parts = StepperParts::new(row.control);
     let (value, at_min, at_max) = app.setting_value(row.setting);
@@ -872,6 +886,19 @@ fn draw_stepper(app: &App, frame: &mut Frame<'_>, row: &SettingRow, clip: Rect) 
         }
     }
 
+    if row.setting == Setting::BackgroundOpacity {
+        if matches!(&app.settings.editing, Some((s, _)) if *s == row.setting) {
+            // 复用设置输入框的光标、选区和错误提示，左右加减按钮仍保留。
+            let input = SettingRow {
+                control: parts.value,
+                ..*row
+            };
+            return draw_field(app, frame, &input, clip);
+        }
+        let hovered = app.settings.hover == Some(SettingsPart::Field(row.setting));
+        draw_button(frame, p, parts.value, clip, hovered, false);
+    }
+
     let w = frame.measure(FontKind::Ui, app.fonts.ui, &value);
     let x = (parts.value.x + (parts.value.w - w) / 2.0).round();
     caps_label(
@@ -883,6 +910,7 @@ fn draw_stepper(app: &App, frame: &mut Frame<'_>, row: &SettingRow, clip: Rect) 
         p.text,
         clip,
     );
+    None
 }
 
 /// 绘制「模式」：跟随系统、浅色、深色三段的分段控件，样式与顶栏的视图切换相同——一条底槽，
