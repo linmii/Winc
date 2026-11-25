@@ -48,16 +48,16 @@ rerun the Release workflow on that tag to retry a failed build.
 ### Fork: Windows portable only
 
 This fork also provides **Windows portable (custom)** in
-`.github/workflows/windows-portable.yml`. Pushing `codex/dev` or `codex/plugin-system` builds an unsigned
+`.github/workflows/windows-portable.yml`. Pushing `codex/dev` or `codex/main` builds an unsigned
 Windows x64 portable ZIP with the text plugin runtime and the duplicate-line example. It uses
 no signing secrets and uploads a ZIP plus `SHA256SUMS` as an Actions artifact for 14 days.
 It does not create a GitHub Release. Enable Actions in the fork before pushing the branch.
 
 After committing the desired changes, push the custom branch, for example
 `git push origin codex/dev`. See [the fork branch policy](../BRANCHES.md) for upstream syncing
-and the separate development and stable integration branches.
-Plugins are currently integrated only into `codex/dev`; `codex/main` starts from upstream `main`
-without plugins or this custom packaging workflow.
+and the custom integration branches.
+Plugins and this packaging workflow are included in both `codex/dev` and `codex/main`.
+Validated changes flow from `codex/dev` into `codex/main`, including upstream development changes.
 Open the successful workflow run under **Actions**, then download its **Artifacts**.
 The downloaded artifact contains the portable ZIP. Extract that ZIP and launch `winc.exe`.
 The workflow also supports `workflow_dispatch`; GitHub's manual-run button requires the

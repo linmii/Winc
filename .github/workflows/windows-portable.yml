@@ -3,7 +3,7 @@ name: Windows portable (custom)
 # Build branches with plugins; dev and main stay exact mirrors of upstream.
 on:
   push:
-    branches: [codex/dev, codex/plugin-system]
+    branches: [codex/dev, codex/main]
   workflow_dispatch:
 
 permissions:
