@@ -44,7 +44,10 @@ fn conflicting_keys_are_listed_while_vim_mode_is_on() {
     // 说明这个键在编辑器中的命令；没有改过时由 Vim 处理。
     let paste = Setting::VimKey('v');
     let description = paste.description().unwrap();
-    assert!(description.contains(Action::Paste.title()), "{description}");
+    assert!(
+        description.contains(Action::Paste.title().as_ref()),
+        "{description}"
+    );
     assert_eq!(app.choice_text(paste).0, "Vim");
 
     app.settings_toggle(Setting::VimMode);

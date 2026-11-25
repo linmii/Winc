@@ -1135,7 +1135,19 @@ impl Document {
         // `map_positions` 按输入的数量返回位置，因此这里正好取到三个。
         let mapped = diff::map_positions(&changes, &[before.anchor, before.head, top]);
         let after = Selection::new(mapped[0], mapped[1]);
-        self.apply(Transaction::new(changes, before, after, EditKind::Other));
+        // Background transforms preserve every cursor in the same undo transaction.
+        let extra_before = self.extra_selections().to_vec();
+        let extra_after = extra_before
+            .iter()
+            .map(|selection| {
+                let positions = diff::map_positions(&changes, &[selection.anchor, selection.head]);
+                Selection::new(positions[0], positions[1])
+            })
+            .collect();
+        let mut transaction = Transaction::new(changes, before, after, EditKind::Other);
+        transaction.extra_before = extra_before;
+        transaction.extra_after = extra_after;
+        self.apply(transaction);
         self.goal_cell = None;
         self.detected_indent = indent::detect(&self.text);
         Some(mapped[2])

@@ -13,6 +13,24 @@ request needs before it can be merged.
 - Read and sign the [Contributor License Agreement](CLA.md). On your first pull request, a bot asks
   you to sign it by commenting on the pull request.
 
+## Issues
+
+Open issues from the [issue forms](https://github.com/DEEIX-AI/Winc/issues/new/choose), also when
+writing them with a tool, and keep the headings: the forms set the issue type, and a workflow labels
+each issue by its answers. An issue written without a form is marked `status: needs template` until
+it is edited to follow one.
+
+| Label | Meaning |
+| --- | --- |
+| `area: …` | The part of winc concerned, from the Area field |
+| `platform: …`, `arch: …` | The system and processor, from the Platform field |
+| `status: needs triage` | Not yet reviewed by a maintainer |
+| `status: needs info` | Waiting for the author; closed after 14 days without a reply and reopened when the author replies |
+| `status: confirmed` | Reproduced or accepted, ready to be worked on |
+| `priority: high`, `priority: low` | Set by maintainers when an issue is more or less urgent than usual |
+
+The labels are defined in [labels.json](labels.json).
+
 ## Branches
 
 - `dev` is the development branch and the repository's default branch. Fork the repository, create

@@ -9,6 +9,7 @@ use winc_config::AutoSave;
 use winc_i18n::t;
 
 use super::*;
+use crate::app::settings::{EXPORTED_SETTINGS, SETTINGS_EXTENSIONS};
 use crate::system;
 
 /// 「停止输入后」自动保存时，最后一次修改之后等待的时间。
@@ -28,6 +29,10 @@ pub(crate) struct AutoSaveWatch {
 /// 系统文件对话框的用途。
 #[derive(Debug, Clone)]
 pub enum Pick {
+    /// Choose a local plugin directory.
+    PluginFolder,
+    /// Choose a plugin manifest or ZIP.
+    PluginPackage,
     /// 可选择文件和目录（`⌘O`）。
     Open,
     /// 只能选择目录。
@@ -50,6 +55,10 @@ pub enum Pick {
     SaveProject,
     /// 「打开项目…」：只能选项目文件（见 [`winc_config::PROJECT_EXTENSIONS`]）。
     OpenProject,
+    /// 「导出设置…」：选导出文件的保存位置。
+    ExportSettings,
+    /// 「导入设置…」：只能选 JSON 文件。
+    ImportSettings,
 }
 
 /// 无法打开的文件在编辑区中给出的操作。
@@ -1077,13 +1086,17 @@ impl App {
             }
             Pick::KeyFile => (String::new(), crate::app::remote::key_dir()),
             Pick::SaveProject => self.project_save_place(),
-            Pick::Open
+            Pick::ExportSettings => (EXPORTED_SETTINGS.to_owned(), None),
+            Pick::PluginPackage
+            | Pick::Open
+            | Pick::PluginFolder
             | Pick::OpenFolder
             | Pick::WslFolder(_)
             | Pick::WorktreeFolder
             | Pick::AddFolder
             | Pick::BackgroundImage
             | Pick::OpenProject
+            | Pick::ImportSettings
             | Pick::Download(_) => (String::new(), None),
         };
 
@@ -1095,17 +1108,25 @@ impl App {
                 return;
             };
             let panel = match &kind {
-                Pick::Open | Pick::BackgroundImage | Pick::KeyFile => Panel::Open {
-                    files: true,
-                    dir: dir.as_deref(),
-                    types: &[],
-                },
+                Pick::Open | Pick::BackgroundImage | Pick::KeyFile | Pick::PluginPackage => {
+                    Panel::Open {
+                        files: true,
+                        dir: dir.as_deref(),
+                        types: &[],
+                    }
+                }
                 Pick::OpenProject => Panel::Open {
                     files: true,
                     dir: None,
                     types: winc_config::PROJECT_EXTENSIONS,
                 },
-                Pick::OpenFolder
+                Pick::ImportSettings => Panel::Open {
+                    files: true,
+                    dir: None,
+                    types: SETTINGS_EXTENSIONS,
+                },
+                Pick::PluginFolder
+                | Pick::OpenFolder
                 | Pick::WslFolder(_)
                 | Pick::WorktreeFolder
                 | Pick::AddFolder
@@ -1114,7 +1135,7 @@ impl App {
                     dir: None,
                     types: &[],
                 },
-                Pick::SaveAs(_) | Pick::SaveProject => Panel::Save {
+                Pick::SaveAs(_) | Pick::SaveProject | Pick::ExportSettings => Panel::Save {
                     name: &name,
                     dir: dir.as_deref(),
                 },
@@ -1135,7 +1156,7 @@ impl App {
             use crate::portal::Choose;
             // 门户的面板只能选文件或者只能选目录：「打开…」选文件，目录从「打开目录…」选。
             let (choose, title) = match &kind {
-                Pick::Open | Pick::BackgroundImage => {
+                Pick::Open | Pick::BackgroundImage | Pick::PluginPackage => {
                     let choose = Choose::Open {
                         directory: false,
                         dir: None,
@@ -1154,6 +1175,14 @@ impl App {
                     };
                     (choose, t!("cmd-open-project"))
                 }
+                Pick::ImportSettings => {
+                    let choose = Choose::Open {
+                        directory: false,
+                        dir: None,
+                        types: Some((t!("settings-files"), SETTINGS_EXTENSIONS)),
+                    };
+                    (choose, t!("cmd-import-settings"))
+                }
                 Pick::KeyFile => {
                     let choose = Choose::Open {
                         directory: false,
@@ -1162,7 +1191,11 @@ impl App {
                     };
                     (choose, t!("workspace-remote-dialog-key-choose"))
                 }
-                Pick::OpenFolder | Pick::WslFolder(_) | Pick::WorktreeFolder | Pick::AddFolder => {
+                Pick::PluginFolder
+                | Pick::OpenFolder
+                | Pick::WslFolder(_)
+                | Pick::WorktreeFolder
+                | Pick::AddFolder => {
                     let choose = Choose::Open {
                         directory: true,
                         dir: None,
@@ -1192,6 +1225,13 @@ impl App {
                     },
                     t!("cmd-save-project-as"),
                 ),
+                Pick::ExportSettings => (
+                    Choose::Save {
+                        name: &name,
+                        dir: dir.as_deref(),
+                    },
+                    t!("cmd-export-settings"),
+                ),
             };
             // 面板的标题不带省略号。
             let title = title.trim_end_matches('…');
@@ -1208,14 +1248,17 @@ impl App {
         {
             // 系统的对话框只能选文件或者只能选目录：「打开…」选文件，目录从「打开目录…」选。
             let title = match &kind {
-                Pick::Open | Pick::BackgroundImage => t!("cmd-open-file"),
+                Pick::Open | Pick::BackgroundImage | Pick::PluginPackage => t!("cmd-open-file"),
                 Pick::OpenProject => t!("cmd-open-project"),
                 Pick::KeyFile => t!("workspace-remote-dialog-key-choose"),
+                Pick::PluginFolder => t!("cmd-import-plugin-folder"),
                 Pick::OpenFolder | Pick::WorktreeFolder => t!("cmd-open-folder"),
                 Pick::AddFolder => t!("cmd-add-folder"),
                 Pick::WslFolder(_) => t!("cmd-open-wsl-folder"),
                 Pick::SaveAs(_) => t!("cmd-save-as"),
                 Pick::SaveProject => t!("cmd-save-project-as"),
+                Pick::ExportSettings => t!("cmd-export-settings"),
+                Pick::ImportSettings => t!("cmd-import-settings"),
                 Pick::Download(_) => t!("menu-download"),
             };
             // 对话框的标题不带省略号；打开期间窗口不响应（`DialogOwner`）。
@@ -1227,6 +1270,9 @@ impl App {
             if matches!(kind, Pick::OpenProject) {
                 let name = t!("workspace-project-files");
                 dialog = dialog.add_filter(name, winc_config::PROJECT_EXTENSIONS);
+            }
+            if matches!(kind, Pick::ImportSettings) {
+                dialog = dialog.add_filter(t!("settings-files"), SETTINGS_EXTENSIONS);
             }
             // 对话框有自己的消息循环，在后台线程上等待关闭，事件循环正常运行。
             std::thread::spawn(move || {
@@ -1242,15 +1288,21 @@ impl App {
                     dialog = dialog.set_parent(owner);
                 }
                 let path = match &kind {
-                    Pick::Open | Pick::BackgroundImage | Pick::KeyFile | Pick::OpenProject => {
-                        dialog.pick_file()
-                    }
-                    Pick::OpenFolder
+                    Pick::Open
+                    | Pick::BackgroundImage
+                    | Pick::KeyFile
+                    | Pick::PluginPackage
+                    | Pick::OpenProject
+                    | Pick::ImportSettings => dialog.pick_file(),
+                    Pick::PluginFolder
+                    | Pick::OpenFolder
                     | Pick::WslFolder(_)
                     | Pick::WorktreeFolder
                     | Pick::AddFolder
                     | Pick::Download(_) => dialog.pick_folder(),
-                    Pick::SaveAs(_) | Pick::SaveProject => dialog.set_file_name(&name).save_file(),
+                    Pick::SaveAs(_) | Pick::SaveProject | Pick::ExportSettings => {
+                        dialog.set_file_name(&name).save_file()
+                    }
                 };
                 drop(owner);
                 let _ = proxy.send_event(UserEvent::Picked(kind, path));
@@ -1283,7 +1335,9 @@ impl App {
         // 取消或保存失败时放弃整个关闭。
         let continuation = match kind {
             Pick::SaveAs(_) => self.closing.continuation.take(),
-            Pick::Open
+            Pick::PluginPackage
+            | Pick::Open
+            | Pick::PluginFolder
             | Pick::OpenFolder
             | Pick::WslFolder(_)
             | Pick::WorktreeFolder
@@ -1292,12 +1346,15 @@ impl App {
             | Pick::KeyFile
             | Pick::Download(_)
             | Pick::SaveProject
-            | Pick::OpenProject => None,
+            | Pick::OpenProject
+            | Pick::ExportSettings
+            | Pick::ImportSettings => None,
         };
 
         let Some(path) = path else { return };
 
         match kind {
+            Pick::PluginFolder | Pick::PluginPackage => self.import_plugin(path),
             Pick::Open => self.open_from_outside(&path),
             Pick::OpenFolder | Pick::WslFolder(_) => self.open_path(&path),
             Pick::WorktreeFolder => self.worktree_folder_picked(path),
@@ -1307,6 +1364,8 @@ impl App {
             Pick::Download(paths) => self.download(paths, path),
             Pick::SaveProject => self.save_project_as(path),
             Pick::OpenProject => self.open_from_outside(&path),
+            Pick::ExportSettings => self.export_settings(&path),
+            Pick::ImportSettings => self.import_settings(&path),
             Pick::SaveAs(id) => {
                 if self.save_picked(id, path)
                     && let Some(prompt) = continuation

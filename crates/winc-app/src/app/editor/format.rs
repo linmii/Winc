@@ -841,7 +841,12 @@ impl App {
     ///
     /// 滚动位置保持稳定：光标原先在屏幕上时，仍留在屏幕上的同一显示行；不在屏幕上时，
     /// 原先最上方的行仍在最上方。
-    fn apply_formatted(&mut self, id: DocumentId, sent: &Rope, changes: Vec<Change>) -> bool {
+    pub(in crate::app) fn apply_formatted(
+        &mut self,
+        id: DocumentId,
+        sent: &Rope,
+        changes: Vec<Change>,
+    ) -> bool {
         let visible = self.visible_lines() as f64;
         let Some(doc) = self.editor.document_mut(id) else {
             return false;

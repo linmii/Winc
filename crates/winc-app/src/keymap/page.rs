@@ -22,7 +22,7 @@ pub(super) fn rows(table: &[Binding], os: Os) -> Vec<(Group, Vec<Row>)> {
         .into_iter()
         .map(|group| {
             let mut rows: Vec<Row> = Vec::new();
-            for &action in ACTIONS.iter().filter(|a| a.group() == group) {
+            for &action in actions().iter().filter(|a| a.group() == group) {
                 let mut mine: Vec<Row> = Vec::new();
                 for b in table.iter().filter(|b| b.action == action) {
                     let label = b.label(os);

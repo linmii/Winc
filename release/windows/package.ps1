@@ -1,17 +1,17 @@
 param(
     [Parameter(Mandatory)][ValidateSet('installers', 'portable')][string]$Phase,
-    [string]$Target = 'x86_64-pc-windows-msvc'
+    [string]$Target = 'x86_64-pc-windows-msvc',
+    [switch]$IncludePlugins
 )
 $ErrorActionPreference = 'Stop'
 if ($Target -ne 'x86_64-pc-windows-msvc') { throw "unsupported Windows target: $Target" }
 $root = (Resolve-Path "$PSScriptRoot/../..").Path
 $version = (& node "$PSScriptRoot/../common/version.mjs").Trim()
 if ($LASTEXITCODE -ne 0) { throw 'cannot read the VERSION file' }
-$config = Get-Content "$env:RUNNER_TEMP/build-config.json" -Raw | ConvertFrom-Json
-if ($config.version -ne $version) { throw 'build configuration does not match the VERSION file' }
 $release = "$root/target/$Target/release"
 $bundle = "$release/bundle"
-$stage = "$bundle/stage"
+# A fresh stage prevents previous packages or portable settings from entering this archive.
+$stage = "$bundle/stage-$Phase-$([Guid]::NewGuid().ToString('N'))"
 $stem = "Winc-$version-windows-x64"
 New-Item -ItemType Directory -Force $stage | Out-Null
 foreach ($name in @('winc.exe', 'winc-pty.exe', 'conpty.dll', 'OpenConsole.exe')) {
@@ -42,11 +42,25 @@ if ($Phase -eq 'portable') {
     # inside also keeps Compress-Archive from dropping the folder as empty.
     New-Item -ItemType Directory -Force "$stage/data" | Out-Null
     Copy-Item "$PSScriptRoot/portable-data-readme.txt" "$stage/data/README.txt" -Force
+    $extras = @()
+    if ($IncludePlugins) {
+        # Plugins sit beside data so packages and profile data can be managed separately.
+        $plugin = "$stage/plugins/winc.remove-duplicate-lines"
+        New-Item -ItemType Directory -Force $plugin | Out-Null
+        Copy-Item "$root/examples/plugins/remove-duplicate-lines/plugin.json", "$root/examples/plugins/remove-duplicate-lines/main.rhai" $plugin -Force
+        Copy-Item "$root/PLUGINS.md" $stage -Force
+        Copy-Item "$PSScriptRoot/portable-plugins-readme.txt" "$stage/README-PORTABLE.txt" -Force
+        $extras = @("$stage/plugins", "$stage/PLUGINS.md", "$stage/README-PORTABLE.txt")
+    }
     # Enumerate the files: installer markers never enter a portable archive.
-    Compress-Archive -Path "$stage/winc.exe", "$stage/winc-pty.exe", "$stage/conpty.dll", "$stage/OpenConsole.exe", "$stage/winc-watch", "$stage/winc-server-Linux-x86_64", "$stage/winc-server-Linux-aarch64", "$stage/bin", "$stage/data", "$stage/LICENSE", "$stage/NOTICE", "$stage/winc.ico" -DestinationPath "$portable/$stem-portable.zip" -Force
+    $files = @("$stage/winc.exe", "$stage/winc-pty.exe", "$stage/conpty.dll", "$stage/OpenConsole.exe", "$stage/winc-watch", "$stage/winc-server-Linux-x86_64", "$stage/winc-server-Linux-aarch64", "$stage/bin", "$stage/data", "$stage/LICENSE", "$stage/NOTICE", "$stage/winc.ico") + $extras
+    Compress-Archive -Path $files -DestinationPath "$portable/$stem-portable.zip" -Force
     return
 }
 
+# Only installers need the signed release configuration; portable builds require no secrets.
+$config = Get-Content "$env:RUNNER_TEMP/build-config.json" -Raw | ConvertFrom-Json
+if ($config.version -ne $version) { throw 'build configuration does not match the VERSION file' }
 New-Item -ItemType Directory -Force "$stage/nsis", "$stage/msi", "$bundle/nsis", "$bundle/msi" | Out-Null
 [IO.File]::WriteAllText("$stage/nsis/winc-installation", "nsis`n")
 [IO.File]::WriteAllText("$stage/msi/winc-installation", "msi`n")

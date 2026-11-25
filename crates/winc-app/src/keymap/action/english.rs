@@ -7,6 +7,11 @@ impl Action {
     pub fn english(self) -> &'static str {
         use Action::*;
         match self {
+            Plugin(_) => "Plugin text transformation",
+            ImportPluginFolder => "Plugins: Import Folder",
+            ImportPluginPackage => "Plugins: Import Package",
+            ManagePlugins => "Plugins: Manage Plugins",
+            ReloadPlugins => "Plugins: Reload Plugins",
             ShowCommands => "Show All Commands",
             QuickOpen => "Go to File",
             GoToSymbol => "Go to Symbol in Editor",
@@ -17,6 +22,8 @@ impl Action {
             GoBack => "Go Back",
             GoForward => "Go Forward",
             Settings => "Settings",
+            ExportSettings => "Export Settings",
+            ImportSettings => "Import Settings",
             ReleaseNotes => "Release Notes",
             KeyboardShortcuts => "Keyboard Shortcuts",
             RecordKeys => "Record Keys",

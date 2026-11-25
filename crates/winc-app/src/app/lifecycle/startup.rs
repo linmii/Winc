@@ -51,6 +51,7 @@ impl App {
             editor,
             terminal: terminal::TerminalPanel::default(),
             run: terminal::run::RunConfigs::default(),
+            plugins: Default::default(),
             store: crate::app::settings::Store {
                 saved_config: config.clone(),
                 config_path: None,
@@ -147,6 +148,7 @@ impl App {
                     ..Default::default()
                 },
                 file_hover: None,
+                dragged_in: None,
                 name_input: None,
                 global: GlobalSearch::default(),
                 outline: OutlineState::default(),

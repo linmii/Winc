@@ -9,9 +9,11 @@ mod formatters;
 pub(super) mod shortcuts;
 mod stepper;
 mod switches;
+mod transfer;
 mod values;
 
 use stepper::step;
+pub(in crate::app) use transfer::{EXPORTED_SETTINGS, SETTINGS_EXTENSIONS};
 
 use winc_editor::format::{
     Auto, FormatError, PRESETS, Plan, Program, Task, knows_how_to_install, presets,

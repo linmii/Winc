@@ -84,6 +84,11 @@ impl App {
         };
 
         match action {
+            Plugin(slot) => self.run_plugin(slot),
+            ImportPluginFolder => self.pick(Pick::PluginFolder),
+            ImportPluginPackage => self.pick(Pick::PluginPackage),
+            ManagePlugins => self.manage_plugins(),
+            ReloadPlugins => self.reload_plugins(),
             ShowCommands => self.toggle_palette(),
             QuickOpen => {
                 if self.overlays.picker.open
@@ -111,6 +116,8 @@ impl App {
             GoBack => self.navigate_history(false),
             GoForward => self.navigate_history(true),
             Settings => self.open_settings(),
+            ExportSettings => self.pick(Pick::ExportSettings),
+            ImportSettings => self.pick(Pick::ImportSettings),
             ReleaseNotes => self.open_release_notes(crate::release_notes::Scope::All),
             KeyboardShortcuts => {
                 self.open_settings();
@@ -616,6 +623,7 @@ impl App {
     /// 命令当前是否可用：属于某个模块的命令只在模块开着时可用。
     pub(in crate::app) fn action_available(&self, action: Action) -> bool {
         match action {
+            Action::Plugin(slot) => return self.plugin_available(slot),
             Action::RunConfiguration if self.editor.root().is_none() => return false,
             // 编辑提交说明只在日志里可用；其余位置同一个键执行其他命令。
             Action::GitRewordCommit if !self.log_active() => return false,

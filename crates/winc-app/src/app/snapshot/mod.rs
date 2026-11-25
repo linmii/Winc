@@ -28,6 +28,7 @@ mod input;
 #[cfg(target_os = "macos")]
 mod memory;
 mod pictures;
+mod plugins;
 mod preview;
 #[cfg(unix)]
 mod remote;

@@ -10,15 +10,8 @@ use crate::keymap::{self, Action};
 /// 命令面板列出的命令列表。
 ///
 /// 内容是键位表中 `in_palette` 为真的动作，顺序与键位表一致；快捷键取自键位表。
-pub fn palette() -> &'static [Action] {
-    static LIST: std::sync::OnceLock<Vec<Action>> = std::sync::OnceLock::new();
-    LIST.get_or_init(|| {
-        keymap::ACTIONS
-            .iter()
-            .copied()
-            .filter(|a| a.in_palette())
-            .collect()
-    })
+pub fn palette() -> std::sync::Arc<[Action]> {
+    keymap::commands()
 }
 
 /// 按 `query` 搜索命令，返回 [`palette()`] 中的下标，匹配度高的在前。
@@ -35,9 +28,9 @@ pub fn search_palette(query: &str) -> Vec<usize> {
         .iter()
         .enumerate()
         .filter_map(|(i, action)| {
-            let best = [action.title(), action.english()]
+            let best = [action.title(), action.english().into()]
                 .into_iter()
-                .filter_map(|text| rate(&needle, text))
+                .filter_map(|text| rate(&needle, &text))
                 .min()?;
             Some((best, i))
         })
@@ -126,6 +119,7 @@ impl App {
     ///
     /// 命令面板即预填 `>` 的快速打开；删除 `>` 后回到文件列表。
     pub(in crate::app) fn open_palette(&mut self) {
+        self.sync_plugin_commands();
         self.finish_name_input();
         self.overlays.picker.places = None;
         self.overlays.picker.branch_rows = None;
@@ -199,12 +193,13 @@ impl App {
 
     /// 执行选中的命令：关闭面板，并将该命令记为最近执行（最多保留 5 条）。
     pub(in crate::app) fn palette_accept(&mut self) {
+        let list = palette();
         let Some(&action) = self
             .overlays
             .picker
             .hits
             .get(self.overlays.picker.selected)
-            .and_then(|&i| palette().get(i))
+            .and_then(|&i| list.get(i))
         else {
             return;
         };

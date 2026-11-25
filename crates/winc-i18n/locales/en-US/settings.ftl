@@ -50,6 +50,13 @@ settings-explorer-menu = Explorer Context Menu
 settings-explorer-menu-desc = Add an entry that opens files and folders in Winc to their context menus
 settings-file-associations = Associate File Types
 settings-file-associations-desc = List Winc among the programs for source and text files
+settings-group-settings-file = Settings File
+settings-export = Export Settings
+settings-export-desc = Save settings and shortcuts to a file that can be imported on another device
+settings-export-button = Export…
+settings-import = Import Settings
+settings-import-desc = Replace the current settings and shortcuts with an exported file, keeping a backup of the current configuration
+settings-import-button = Import…
 settings-group-network = Updates and Network
 settings-group-font-indent = Font and Indentation
 settings-group-general = General
@@ -385,3 +392,14 @@ settings-zoom = Zoom { $zoom }%
 settings-config-backed-up = The configuration file couldn’t be parsed; it was saved as { $path } and the new settings were written
 settings-config-comments-backed-up = Comments in the configuration file can’t be kept when writing settings; the original was saved as { $path }
 settings-config-write-failed = Couldn’t write the configuration file: { $error }
+settings-files = Settings Files
+settings-exported = Exported settings to “{ $name }”
+settings-export-failed = Couldn’t export settings: { $error }
+settings-imported = Imported settings; the previous configuration was saved as { $path }
+settings-imported-new = Imported settings
+settings-imported-ignored = { $count ->
+    [one] Imported settings, ignoring { $count } unrecognized item
+   *[other] Imported settings, ignoring { $count } unrecognized items
+}
+settings-import-invalid = “{ $name }” isn’t a valid settings file
+settings-import-failed = Couldn’t import settings: { $error }

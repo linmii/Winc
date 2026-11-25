@@ -45,6 +45,7 @@ impl App {
         }
 
         match menu.target {
+            MenuTarget::Plugins(ids) => self.plugin_menu_command(&ids, command),
             MenuTarget::Tree(path) => self.run_tree_command(command, path),
             MenuTarget::Tab(id) => self.run_tab_command(command, id),
             MenuTarget::CommitFile(path) => self.run_commit_file_command(command, path),
@@ -743,12 +744,9 @@ impl App {
         self.focus = Focus::Tree;
     }
 
-    /// Git 模块开着、`path` 在仓库里。
+    /// Git 模块开着、`path` 在某个已知仓库里（见 [`App::repo_of`]），不一定是当前仓库。
     pub(super) fn in_repo(&self, path: &Path) -> bool {
-        self.git.root.as_deref().is_some_and(|root| {
-            path.starts_with(root)
-                || winc_config::files::canonicalize(path).is_ok_and(|real| real.starts_with(root))
-        })
+        self.repo_of(path).is_some()
     }
 
     /// 返回 `path` 相对于它所在的目录（打开的目录或附加的目录）的路径；不在这些目录内或就是

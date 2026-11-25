@@ -45,6 +45,40 @@ rerun the Release workflow on that tag to retry a failed build.
 
 ## Signing configuration
 
+### Fork: Windows portable only
+
+This fork also provides **Windows portable (custom)** in
+`.github/workflows/windows-portable.yml`. Pushing `codex/dev` or `codex/main` builds an unsigned
+Windows x64 portable ZIP with the text plugin runtime and the duplicate-line example. It uses
+no signing secrets and uploads a ZIP plus `SHA256SUMS` as an Actions artifact for 14 days.
+It does not create a GitHub Release. Enable Actions in the fork before pushing the branch.
+
+After committing the desired changes, push the custom branch, for example
+`git push origin codex/dev`. See [the fork branch policy](../BRANCHES.md) for upstream syncing
+and the custom integration branches.
+Plugins and this packaging workflow are included in both `codex/dev` and `codex/main`.
+Validated changes flow from `codex/dev` into `codex/main`, including upstream development changes.
+Open the successful workflow run under **Actions**, then download its **Artifacts**.
+The downloaded artifact contains the portable ZIP. Extract that ZIP and launch `winc.exe`.
+The workflow also supports `workflow_dispatch`; GitHub's manual-run button requires the
+workflow file on the repository's default branch. The mirror branches do not carry this custom
+workflow, so use the push trigger while the default branch is `dev` or `main`.
+
+For local packaging, build the Windows programs and Linux helpers as in the workflow, fetch
+the pinned console host, then run (PowerShell 7):
+
+```powershell
+./release/windows/package.ps1 -Phase portable -IncludePlugins
+./release/windows/verify-portable.ps1 -Archive "target/x86_64-pc-windows-msvc/release/bundle/portable/Winc-<version>-windows-x64-portable.zip" -IncludePlugins
+```
+
+Keep final ZIPs under `release/out/` before removing `target/`. The portable profile lives in
+`data/` and text plugins live in `plugins/`, both beside the executable. Preserve both directories
+when updating a personal installation. For older custom builds, move packages from `data/plugins/`
+into `plugins/`, keeping your edited version if a package with the same ID already exists.
+
+### Full upstream release
+
 Apart from the update key, names are identical to DEEIX Chat. Store private values as repository or
 organization **Secrets**, not Variables or committed files.
 

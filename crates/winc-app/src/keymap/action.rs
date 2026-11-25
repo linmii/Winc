@@ -14,6 +14,16 @@ pub use list::ACTIONS;
 /// 变体按所属分组（[`Group`]）依次排列；各命令的显示名见 [`Action::title`] 和 [`Action::english`]。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Action {
+    /// Runtime plugin command; persisted through its stable manifest id.
+    Plugin(usize),
+    /// Install a plugin directory.
+    ImportPluginFolder,
+    /// Install a plugin manifest or ZIP.
+    ImportPluginPackage,
+    /// Enable, disable or uninstall installed plugins.
+    ManagePlugins,
+    /// Reload plugin packages after editing source files.
+    ReloadPlugins,
     ShowCommands,
     QuickOpen,
     GoToSymbol,
@@ -24,6 +34,8 @@ pub enum Action {
     GoBack,
     GoForward,
     Settings,
+    ExportSettings,
+    ImportSettings,
     ReleaseNotes,
     KeyboardShortcuts,
     RecordKeys,
@@ -454,9 +466,22 @@ impl Action {
     }
 
     /// 返回命令在当前界面语言中的名称，命令面板、「快捷键」页和菜单都使用它。
-    pub fn title(self) -> &'static str {
+    pub fn title(self) -> std::borrow::Cow<'static, str> {
+        match self {
+            Self::Plugin(slot) => std::borrow::Cow::Owned(super::plugins::title(slot)),
+            _ => std::borrow::Cow::Borrowed(self.builtin_title()),
+        }
+    }
+
+    /// Static labels used by native menus containing built-in actions.
+    pub(crate) fn builtin_title(self) -> &'static str {
         use Action::*;
         match self {
+            Plugin(_) => "Plugin",
+            ImportPluginFolder => t!("cmd-import-plugin-folder"),
+            ImportPluginPackage => t!("cmd-import-plugin-package"),
+            ManagePlugins => t!("cmd-manage-plugins"),
+            ReloadPlugins => t!("cmd-reload-plugins"),
             ShowCommands => t!("cmd-show-commands"),
             QuickOpen => t!("cmd-quick-open"),
             GoToSymbol => t!("cmd-go-to-symbol"),
@@ -467,6 +492,8 @@ impl Action {
             GoBack => t!("cmd-go-back"),
             GoForward => t!("cmd-go-forward"),
             Settings => t!("cmd-settings"),
+            ExportSettings => t!("cmd-export-settings"),
+            ImportSettings => t!("cmd-import-settings"),
             ReleaseNotes => t!("cmd-release-notes"),
             KeyboardShortcuts => t!("cmd-keyboard-shortcuts"),
             RecordKeys => t!("cmd-record-keys"),
@@ -766,6 +793,9 @@ impl Action {
 
     /// 返回命令在配置文件中的名字：变体名，首字母小写（如 `quickOpen`）。
     pub fn id(self) -> String {
+        if let Self::Plugin(slot) = self {
+            return super::plugins::id(slot);
+        }
         let name = format!("{self:?}");
         let mut chars = name.chars();
         chars.next().map_or_else(String::new, |first| {
@@ -775,7 +805,11 @@ impl Action {
 
     /// 按配置文件中的名字 `id` 返回命令；不认识时返回 `None`。
     pub fn from_id(id: &str) -> Option<Action> {
-        ACTIONS.iter().copied().find(|action| action.id() == id)
+        ACTIONS
+            .iter()
+            .copied()
+            .find(|action| action.id() == id)
+            .or_else(|| super::plugins::from_id(id))
     }
 
     /// 返回命令所属的分组。
@@ -792,11 +826,17 @@ impl Action {
             | GoBack
             | GoForward
             | Settings
+            | ExportSettings
+            | ImportSettings
             | ReleaseNotes
             | KeyboardShortcuts
             | RecordKeys
             | InstallShellCommand
-            | UninstallShellCommand => Group::General,
+            | UninstallShellCommand
+            | ImportPluginFolder
+            | ImportPluginPackage
+            | ManagePlugins
+            | ReloadPlugins => Group::General,
             NewFile | OpenFile | OpenFolder | OpenProject | AddFolder | SaveProjectAs
             | RemoteConnect | RemoteDisconnect | Save | SaveAs | CloseTab | CloseOtherTabs
             | CloseAllTabs | ReopenClosed | NextTab | PreviousTab | FocusTab1 | FocusTab2
@@ -911,7 +951,8 @@ impl Action {
             | ClearBookmarks
             | Format
             | FormatSelection
-            | Fix => Group::Edit,
+            | Fix
+            | Plugin(_) => Group::Edit,
             Find | Replace | FindNext | FindPrevious | HighlightWord | ClearWordHighlights
             | ReplaceOne | ReplaceAll | SelectAllMatches | ToggleCase | ToggleWord
             | ToggleRegex | FilterLines | FindInFiles | OpenSearchDialog | ReplaceInFiles
@@ -1085,6 +1126,7 @@ impl Action {
     pub fn edits_in_diff(self) -> bool {
         use Action::*;
         match self {
+            Plugin(_) => false,
             Save | SelectAllMatches => true,
             Fold
             | Unfold

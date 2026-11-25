@@ -347,6 +347,7 @@ impl App {
             self.follow_log_root();
         }
         let entries = match &target {
+            MenuTarget::Plugins(ids) => self.plugin_menu(ids),
             &MenuTarget::AddLanguage(task) => {
                 let listed = match task {
                     Task::Format => &self.settings.listed.format,

@@ -8,6 +8,10 @@ use super::*;
 pub const ACTIONS: &[Action] = {
     use Action::*;
     &[
+        ImportPluginFolder,
+        ImportPluginPackage,
+        ManagePlugins,
+        ReloadPlugins,
         QuickOpen,
         GoToSymbol,
         GoToLine,
@@ -18,6 +22,8 @@ pub const ACTIONS: &[Action] = {
         GoForward,
         ShowCommands,
         Settings,
+        ExportSettings,
+        ImportSettings,
         ReleaseNotes,
         KeyboardShortcuts,
         RecordKeys,

@@ -388,6 +388,9 @@ impl App {
 
 /// 返回命令 `action` 在键位表 `table` 中的生效范围；没有键时为所有区域。
 fn action_scopes(table: &[keymap::Binding], action: Action) -> Vec<keymap::When> {
+    if matches!(action, Action::Plugin(_)) {
+        return vec![keymap::When::Editor];
+    }
     let mut scopes: Vec<keymap::When> = Vec::new();
     for b in table.iter().filter(|b| b.action == action) {
         if !scopes.contains(&b.when) {

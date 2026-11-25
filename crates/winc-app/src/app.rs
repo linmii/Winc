@@ -12,6 +12,7 @@ pub(crate) mod git;
 pub(crate) mod hits;
 mod input;
 mod lifecycle;
+mod plugins;
 pub(crate) mod preview;
 mod release_notes;
 pub(crate) mod remote;
@@ -132,6 +133,8 @@ type OrderedTask = Box<dyn FnOnce() + Send>;
 /// 后台线程和系统回调（面板、菜单、提示框）送回事件循环的事件。
 #[derive(Debug)]
 pub enum UserEvent {
+    /// Plugin loading or text transformation completed.
+    PluginsReady,
     /// 打开或另存为面板已关闭；取消时路径为 `None`。
     Picked(Pick, Option<PathBuf>),
     /// 全局搜索产生了新结果，或已搜索完成。
@@ -959,6 +962,7 @@ pub struct App {
     pub(crate) terminal: terminal::TerminalPanel,
     /// 当前目录的运行配置。
     pub(crate) run: terminal::run::RunConfigs,
+    plugins: plugins::Plugins,
     /// 当前生效的配置。
     pub config: Config,
     /// 配置与状态文件的写回：文件的路径、配置文件当前的内容和配置的版本号。
@@ -1209,6 +1213,7 @@ impl App {
             UserEvent::FolderListed => self.poll_folder_levels(),
             UserEvent::WatcherStarted => self.poll_watchers(),
             UserEvent::FormatPlanned => self.poll_formatting(),
+            UserEvent::PluginsReady => self.poll_plugins(),
             UserEvent::FileWorked => self.poll_file_work(),
             UserEvent::GitMergeSides => self.poll_merge_sides(),
             UserEvent::GitLog => self.poll_log(),
@@ -1231,6 +1236,11 @@ impl App {
     /// 返回本窗口的系统窗口编号；窗口尚未创建时为 `None`。
     pub(crate) fn window_id(&self) -> Option<winit::window::WindowId> {
         self.window.handle.as_ref().map(|w| w.id())
+    }
+
+    /// 返回系统窗口；还没有创建（测试中）时返回 `None`。
+    pub(crate) fn system_window(&self) -> Option<&Arc<winit::window::Window>> {
+        self.window.handle.as_ref()
     }
 
     /// 返回鼠标位置（逻辑像素）。

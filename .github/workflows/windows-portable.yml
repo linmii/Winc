@@ -1,0 +1,67 @@
+name: Windows portable (custom)
+
+# Build branches with plugins; dev and main stay exact mirrors of upstream.
+on:
+  push:
+    branches: [codex/dev, codex/main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-portable-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  portable:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: 0
+      TARGET: x86_64-pc-windows-msvc
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: ./.github/actions/build-setup
+        with:
+          target: ${{ env.TARGET }}
+          source-sha: ${{ github.sha }}
+      - name: Compile Windows programs
+        run: |
+          cargo build --release --locked --target $env:TARGET -p winc -p winc-pty
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo xtask icons "target/$env:TARGET/release/bundle/icons"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Compile remote servers and WSL watcher
+        run: |
+          cargo xtask server
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER = 'rust-lld'
+          cargo build --release --locked --target x86_64-unknown-linux-musl -p winc-watch
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Fetch pinned console host
+        run: ./release/windows/conpty.ps1 -Destination "target/$env:TARGET/release"
+      - name: Package and verify portable ZIP
+        run: |
+          ./release/windows/package.ps1 -Phase portable -Target $env:TARGET -IncludePlugins
+          $version = (Get-Content VERSION -Raw).Trim()
+          $zip = "target/$env:TARGET/release/bundle/portable/Winc-$version-windows-x64-portable.zip"
+          ./release/windows/verify-portable.ps1 -Archive $zip -IncludePlugins
+          New-Item -ItemType Directory -Force release/out | Out-Null
+          $name = "Winc-$version-windows-x64-portable-plugins.zip"
+          Copy-Item -LiteralPath $zip -Destination "release/out/$name"
+          $hash = (Get-FileHash "release/out/$name" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $name" | Set-Content -Encoding utf8NoBOM release/out/SHA256SUMS
+      # Downloadable build artifacts only: no signing secrets or Release publication.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Winc-windows-x64-portable-${{ github.run_number }}
+          path: release/out/*
+          compression-level: 0
+          retention-days: 14
+          if-no-files-found: error

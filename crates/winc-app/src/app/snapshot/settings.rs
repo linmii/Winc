@@ -7,6 +7,7 @@ mod format;
 mod search;
 mod shortcuts;
 mod terminal;
+mod transfer;
 mod vim;
 
 use super::*;
