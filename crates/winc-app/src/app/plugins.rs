@@ -54,6 +54,15 @@ impl Drop for Plugins {
     }
 }
 
+/// 便携版的插件与 data 同级；常规安装仍使用用户配置目录下的 plugins。
+fn plugin_directory(config_path: Option<&Path>, portable_data: Option<&Path>) -> Option<PathBuf> {
+    let parent = match portable_data {
+        Some(data) => data.parent(),
+        None => config_path.and_then(Path::parent),
+    }?;
+    Some(parent.join("plugins"))
+}
+
 impl App {
     fn plugin_root(&self) -> Option<PathBuf> {
         #[cfg(test)]
@@ -61,11 +70,15 @@ impl App {
             self.plugins.root.clone()
         }
         #[cfg(not(test))]
-        self.store
-            .config_path
-            .clone()
-            .or_else(winc_config::config_path)
-            .and_then(|p| p.parent().map(|p| p.join("plugins")))
+        {
+            let config_path = self
+                .store
+                .config_path
+                .clone()
+                .or_else(winc_config::config_path);
+            let portable_data = winc_config::files::portable_dir();
+            plugin_directory(config_path.as_deref(), portable_data.as_deref())
+        }
     }
 
     /// Reload scripts after a package change or an explicit developer reload command.

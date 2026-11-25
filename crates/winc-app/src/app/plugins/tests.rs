@@ -60,6 +60,54 @@ fn text(app: &App) -> String {
 }
 
 #[test]
+fn imports_and_reloads_plugins_in_the_portable_or_user_directory() {
+    let source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/plugins/remove-duplicate-lines");
+    for portable in [true, false] {
+        let temp = Temp::new();
+        // 配置目录恰好叫 data 不代表便携版，必须使用实际的便携模式判断结果。
+        let data = temp.0.join("data");
+        std::fs::create_dir(&data).unwrap();
+        let config = data.join("config.json");
+        let root = plugin_directory(Some(&config), portable.then_some(data.as_path())).unwrap();
+        let expected = if portable { &temp.0 } else { &data }.join("plugins");
+        let unused = if portable { &data } else { &temp.0 }.join("plugins");
+        let mut app = App::new(
+            Editor::default(),
+            None,
+            Bench::from_env(),
+            Config::default(),
+        );
+        app.plugins.root = Some(root);
+        keymap::plugins::install(Vec::new());
+        app.import_plugin(source.clone());
+        assert!(
+            expected
+                .join("winc.remove-duplicate-lines/plugin.json")
+                .is_file()
+        );
+        assert!(!unused.exists());
+
+        // 清空命令后重新加载，确认发现、禁用和卸载都使用同一个目录。
+        keymap::plugins::install(Vec::new());
+        app.reload_plugins();
+        let action =
+            Action::from_id("plugin:winc.remove-duplicate-lines/remove-duplicates").unwrap();
+        assert!(app.action_available(action));
+        app.manage_plugins();
+        app.run_menu_command(MenuCommand::PluginEnable(0, false));
+        assert!(
+            expected
+                .join("winc.remove-duplicate-lines/.disabled")
+                .is_file()
+        );
+        app.manage_plugins();
+        app.run_menu_command(MenuCommand::PluginRemove(0));
+        assert!(!expected.join("winc.remove-duplicate-lines").exists());
+    }
+}
+
+#[test]
 fn plugin_command_transforms_and_undoes_the_document() {
     let (mut app, _dir, action) = test_app("甲\n乙\n甲\n");
     // 上游将静态命令列表拆到单独模块，管理命令和动态脚本都必须继续注册。

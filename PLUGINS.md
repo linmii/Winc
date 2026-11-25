@@ -20,9 +20,23 @@
 已安装脚本出现语法错误时，会显示“无法加载”，仍然可以禁用、修复后重新加载或卸载。
 同一标识的插件不会被静默覆盖；更新时先卸载旧包，再导入新包。
 
-插件复制到 Winc **配置目录下的 `plugins/<插件标识>/`**，关闭重开后自动加载。
-Windows 常规安装使用 `%APPDATA%/winc/plugins/`，便携版使用 `winc.exe` 旁的
-`data/plugins/`。修改原来的导入目录不会影响已安装副本；开发时修改已安装脚本，随后执行
+插件导入后复制到插件目录，关闭重开后自动加载。常规安装使用配置目录下的
+`plugins/<插件标识>/`（Windows 为 `%APPDATA%/winc/plugins/`）。便携版使用
+`winc.exe` 旁的 `plugins/<插件标识>/`，与 `data` 同级：
+
+```text
+winc.exe
+data/
+plugins/
+└── winc.remove-duplicate-lines/
+    ├── plugin.json
+    └── main.rhai
+```
+
+旧版升级时，将 `data/plugins` 中的插件目录移入同级的 `plugins`，同名插件保留自己
+修改的版本，再执行“插件：重新加载”。更新便携版时保留 `data` 和 `plugins` 两个目录。
+
+修改原来的导入目录不会影响已安装副本；开发时修改已安装脚本，随后执行
 “插件：重新加载”。禁用状态保存在包目录的 `.disabled` 文件中。
 
 ## 插件格式

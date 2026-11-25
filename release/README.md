@@ -73,7 +73,9 @@ the pinned console host, then run (PowerShell 7):
 ```
 
 Keep final ZIPs under `release/out/` before removing `target/`. The portable profile lives in
-`data/` beside the executable; preserve that directory when updating a personal installation.
+`data/` and text plugins live in `plugins/`, both beside the executable. Preserve both directories
+when updating a personal installation. For older custom builds, move packages from `data/plugins/`
+into `plugins/`, keeping your edited version if a package with the same ID already exists.
 
 ### Full upstream release
 

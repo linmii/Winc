@@ -44,13 +44,13 @@ if ($Phase -eq 'portable') {
     Copy-Item "$PSScriptRoot/portable-data-readme.txt" "$stage/data/README.txt" -Force
     $extras = @()
     if ($IncludePlugins) {
-        # Keep the example editable in the portable profile, without requiring a script runtime.
-        $plugin = "$stage/data/plugins/winc.remove-duplicate-lines"
+        # Plugins sit beside data so packages and profile data can be managed separately.
+        $plugin = "$stage/plugins/winc.remove-duplicate-lines"
         New-Item -ItemType Directory -Force $plugin | Out-Null
         Copy-Item "$root/examples/plugins/remove-duplicate-lines/plugin.json", "$root/examples/plugins/remove-duplicate-lines/main.rhai" $plugin -Force
         Copy-Item "$root/PLUGINS.md" $stage -Force
         Copy-Item "$PSScriptRoot/portable-plugins-readme.txt" "$stage/README-PORTABLE.txt" -Force
-        $extras = @("$stage/PLUGINS.md", "$stage/README-PORTABLE.txt")
+        $extras = @("$stage/plugins", "$stage/PLUGINS.md", "$stage/README-PORTABLE.txt")
     }
     # Enumerate the files: installer markers never enter a portable archive.
     $files = @("$stage/winc.exe", "$stage/winc-pty.exe", "$stage/conpty.dll", "$stage/OpenConsole.exe", "$stage/winc-watch", "$stage/winc-server-Linux-x86_64", "$stage/winc-server-Linux-aarch64", "$stage/bin", "$stage/data", "$stage/LICENSE", "$stage/NOTICE", "$stage/winc.ico") + $extras
