@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+mod json_sort;
+
 struct Temp(PathBuf);
 impl Temp {
     fn new() -> Self {

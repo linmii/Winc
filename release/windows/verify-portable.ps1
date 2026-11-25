@@ -19,7 +19,9 @@ try {
     if ($IncludePlugins) {
         $required += @('PLUGINS.md', 'README-PORTABLE.txt',
             'plugins/winc.remove-duplicate-lines/plugin.json',
-            'plugins/winc.remove-duplicate-lines/main.rhai')
+            'plugins/winc.remove-duplicate-lines/main.rhai',
+            'plugins/winc.sort-json-keys/plugin.json',
+            'plugins/winc.sort-json-keys/main.rhai')
     }
     # Exact membership also excludes installer markers, user state and compiler output.
     foreach ($name in $required) {
@@ -57,9 +59,11 @@ try {
         throw 'WSL launcher must use LF line endings'
     }
     if ($IncludePlugins) {
-        $manifest = [Text.Encoding]::UTF8.GetString((Read-EntryBytes 'plugins/winc.remove-duplicate-lines/plugin.json')) | ConvertFrom-Json
-        if ($manifest.id -ne 'winc.remove-duplicate-lines' -or $manifest.api_version -ne 1 -or
-            $manifest.commands[0].script -ne 'main.rhai') { throw 'invalid bundled plugin manifest' }
+        foreach ($name in @('remove-duplicate-lines', 'sort-json-keys')) {
+            $manifest = [Text.Encoding]::UTF8.GetString((Read-EntryBytes "plugins/winc.$name/plugin.json")) | ConvertFrom-Json
+            if ($manifest.id -ne "winc.$name" -or $manifest.api_version -ne 1 -or
+                $manifest.commands[0].script -ne 'main.rhai') { throw "invalid bundled plugin manifest: $name" }
+        }
     }
     Write-Host "Verified $($files.Count) portable files, Windows x64 and both Linux architectures."
 } finally {

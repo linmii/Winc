@@ -45,9 +45,11 @@ if ($Phase -eq 'portable') {
     $extras = @()
     if ($IncludePlugins) {
         # Plugins sit beside data so packages and profile data can be managed separately.
-        $plugin = "$stage/plugins/winc.remove-duplicate-lines"
-        New-Item -ItemType Directory -Force $plugin | Out-Null
-        Copy-Item "$root/examples/plugins/remove-duplicate-lines/plugin.json", "$root/examples/plugins/remove-duplicate-lines/main.rhai" $plugin -Force
+        foreach ($name in @('remove-duplicate-lines', 'sort-json-keys')) {
+            $plugin = "$stage/plugins/winc.$name"
+            New-Item -ItemType Directory -Force $plugin | Out-Null
+            Copy-Item "$root/examples/plugins/$name/plugin.json", "$root/examples/plugins/$name/main.rhai" $plugin -Force
+        }
         Copy-Item "$root/PLUGINS.md" $stage -Force
         Copy-Item "$PSScriptRoot/portable-plugins-readme.txt" "$stage/README-PORTABLE.txt" -Force
         $extras = @("$stage/plugins", "$stage/PLUGINS.md", "$stage/README-PORTABLE.txt")

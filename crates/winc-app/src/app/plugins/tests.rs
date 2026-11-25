@@ -172,6 +172,60 @@ fn only_selected_text_changes_and_multiselections_undo_as_one_step() {
 }
 
 #[test]
+fn json_sort_command_handles_selections_atomically_and_supports_undo() {
+    let source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/plugins/sort-json-keys");
+    let left = r#"{"b":2,"a":1}"#;
+    let right = r#"{"d":4,"c":3}"#;
+    let sorted_left = "{\n  \"a\": 1,\n  \"b\": 2\n}";
+    let sorted_right = "{\n  \"c\": 3,\n  \"d\": 4\n}";
+    for selected in [false, true] {
+        for valid in [false, true] {
+            let right = if valid { right } else { r#"{"c":}"# };
+            let original = if selected {
+                format!("前\n{left}\n中\n{right}\n后")
+            } else {
+                right.to_string()
+            };
+            let (mut app, _dir, _) = test_app(&original);
+            app.import_plugin(source.clone());
+            let action = Action::from_id("plugin:winc.sort-json-keys/sort-keys").unwrap();
+            assert!(palette().contains(&action));
+            if selected {
+                let left_end = 2 + left.chars().count();
+                let right_start = left_end + 3;
+                app.editor.active_mut().unwrap().set_selections(
+                    vec![
+                        Selection::new(2, left_end),
+                        Selection::new(right_start, right_start + right.chars().count()),
+                    ],
+                    0,
+                );
+            }
+            let selections = app.editor.active().unwrap().selections();
+            assert!(app.run_action(action));
+            if valid {
+                let expected = if selected {
+                    format!("前\n{sorted_left}\n中\n{sorted_right}\n后")
+                } else {
+                    sorted_right.to_string()
+                };
+                assert_eq!(text(&app), expected);
+                app.run(Command::Undo);
+                assert_eq!(text(&app), original);
+                assert_eq!(app.editor.active().unwrap().selections(), selections);
+                app.run(Command::Redo);
+                assert_eq!(text(&app), expected);
+            } else {
+                // A malformed second selection must not apply the successful first result.
+                assert_eq!(text(&app), original);
+                assert_eq!(app.editor.active().unwrap().selections(), selections);
+            }
+        }
+    }
+}
+
+#[test]
 fn shortcuts_persist_while_plugins_are_disabled_or_missing() {
     let (mut app, dir, action) = test_app("a\na\n");
     let id = action.id();
