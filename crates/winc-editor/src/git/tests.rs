@@ -5,8 +5,10 @@
 
 use super::*;
 
+mod commit;
 mod history;
 mod locate;
+mod pathspec;
 
 fn root() -> PathBuf {
     PathBuf::from("/repo")
@@ -288,6 +290,11 @@ fn failures_pick_the_line_that_explains() {
 ///
 /// 找不到 `git` 时返回 `None`。
 pub(super) fn real_git() -> Option<Git> {
+    real_git_with(None)
+}
+
+/// 同 [`real_git`]，`program` 是代替 `git` 运行的程序（模拟旧版本的脚本）。
+pub(super) fn real_git_with(program: Option<&str>) -> Option<Git> {
     let mut vars: Vec<_> = std::env::vars_os().collect();
     for (k, v) in [
         ("GIT_AUTHOR_NAME", "t"),
@@ -300,6 +307,21 @@ pub(super) fn real_git() -> Option<Git> {
     ] {
         vars.push((k.into(), v.into()));
     }
+    Git::find_with(&Shell::with_vars(vars), program).ok()
+}
+
+/// 同 [`real_git`]，也不读系统和用户的 Git 配置：Git for Windows 在系统配置里写了
+/// `pull.rebase` 等设置，按「没有配置」判断的测试要用它。
+///
+/// 找不到 `git` 时返回 `None`。
+fn unconfigured_git() -> Option<Git> {
+    let ours = ["GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL"];
+    let mut vars: Vec<_> = std::env::vars_os()
+        .filter(|(key, _)| !ours.iter().any(|ours| key == ours))
+        .collect();
+    let missing = crate::test_util::scratch("no-global-config").join("gitconfig");
+    vars.push(("GIT_CONFIG_NOSYSTEM".into(), "1".into()));
+    vars.push(("GIT_CONFIG_GLOBAL".into(), missing.into_os_string()));
     Git::find(&Shell::with_vars(vars)).ok()
 }
 
@@ -589,6 +611,87 @@ fn risk_fingerprints_stay_the_same_across_versions() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// 分别读出的各范围配置拼成 `--show-scope` 的格式；只有仓库的配置开启了
+/// `extensions.worktreeConfig` 时才另读工作树的配置。
+#[test]
+fn scopes_read_one_by_one_join_like_show_scope() {
+    let joined = join_scopes(&[
+        ("global", b"user.name\nt\0"),
+        ("local", b"core.fsmonitor\nsh x\0core.bare\nfalse\0"),
+        ("worktree", b""),
+    ]);
+    assert_eq!(
+        joined,
+        b"global\0user.name\nt\0local\0core.fsmonitor\nsh x\0local\0core.bare\nfalse\0"
+    );
+    assert!(worktree_config(
+        b"core.bare\nfalse\0extensions.worktreeconfig\ntrue\0"
+    ));
+    assert!(worktree_config(b"extensions.worktreeconfig\0"));
+    assert!(!worktree_config(b"extensions.worktreeconfig\nfalse\0"));
+    assert!(!worktree_config(b"core.bare\nfalse\0"));
+}
+
+/// 回归：2.26 以前的 `git` 没有 `--show-scope`，读不出仓库的配置，每个仓库都要求信任。改为
+/// 按范围分别读取，结果（含 `include` 进来的配置）和指纹与 `--show-scope` 相同。
+///
+/// 找不到 `git` 时跳过。
+#[test]
+fn reading_scopes_one_by_one_finds_the_same_risks() {
+    let shell = Shell::with_vars(std::env::vars_os().collect());
+    let Ok(git) = Git::find(&shell) else {
+        return;
+    };
+    let dir = crate::test_util::scratch("trust-scopes");
+    let root = winc_config::files::canonicalize(&dir).unwrap();
+    let sh = |args: &[&str]| {
+        let ok = Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(args)
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok, "git {args:?}");
+    };
+    sh(&["init", "-q", "-b", "main"]);
+    sh(&["config", "core.fsmonitor", "sh -c true"]);
+    sh(&["config", "core.hooksPath", "tools/hooks"]);
+    std::fs::write(root.join(".git/extra"), "[filter \"x\"]\n\tclean = cat\n").unwrap();
+    sh(&["config", "include.path", "extra"]);
+
+    let mut command = git.at(&root);
+    command.args(["config", "--list", "--show-scope", "-z"]);
+    let scoped = git
+        .run(&mut command, SHOW_TIMEOUT, &Cancel::default())
+        .unwrap();
+    let by_scope = git.config_by_scope(&root).unwrap();
+    let risks = |out: &[u8]| parse_risks(out, &root, None, None);
+    let (expected, found) = (risks(&scoped), risks(&by_scope));
+    assert!(
+        found.items.contains(&"filter.x.clean = cat".to_owned()),
+        "{found:?}"
+    );
+    assert_eq!(found, expected);
+
+    // 不认识 `--show-scope` 的 `git`（按 2.25 的样子以 129 退出）：检查仍然得出同样的结果。
+    #[cfg(unix)]
+    {
+        let fake = dir.join("old-git");
+        let body = "#!/bin/sh\nfor a in \"$@\"; do\n  if [ \"$a\" = --show-scope ]; then\n    \
+                    echo \"error: unknown option \\`show-scope'\" >&2; exit 129\n  fi\ndone\n\
+                    exec git \"$@\"\n";
+        winc_backend::testing::write_script(&fake, body);
+        let old = Git::find_with(&shell, Some(&fake.to_string_lossy())).unwrap();
+        let inspected = old.inspect(&root).unwrap();
+        assert_eq!(inspected.items, expected.items);
+        assert_eq!(inspected.fingerprint, expected.fingerprint);
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// 回归：设置 `core.hooksPath` 后仍按 `.git/hooks` 判断，配置目录里的钩子内容变化时不会
 /// 要求重新确认。
 #[cfg(unix)]
@@ -639,7 +742,7 @@ fn risks_follow_the_configured_hooks_path() {
 }
 
 /// 仓库的配置里有过滤器和 fsmonitor 命令、hooks 目录里有钩子：信任之前读状态、取内容都
-/// 不运行它们，提交被拒绝；信任之后照常运行。
+/// 不运行它们，提交被拒绝；信任之后仍然运行。
 ///
 /// 找不到 `git` 时跳过。
 #[test]
@@ -918,7 +1021,7 @@ fn unset_wsl_variables_do_not_select_an_empty_index() {
 fn pathspecs_separate_with_forward_slashes() {
     let root = Path::new("/repo");
     let paths = [root.join("src").join("main.rs"), root.join("README.md")];
-    let specs: Vec<OsString> = relative_all(root, &paths).collect();
+    let specs: Vec<OsString> = crate::git::pathspec::relative_all(root, &paths).collect();
     assert_eq!(specs, [":(literal)src/main.rs", ":(literal)README.md"]);
     assert_eq!(slash_path(root, &paths[0]).unwrap(), "src/main.rs");
 }
@@ -1346,4 +1449,30 @@ fn only_online_commands_follow_the_proxy() {
     assert!(!online(&["add", "--all", "--", "a.rs"]));
     assert!(!online(&["commit", "-m", "x"]));
     assert!(!online(&["-c", "core.fsmonitor=false", "stash", "push"]));
+}
+
+/// 拉取的方式按 `branch.<分支>.rebase` 优先、`pull.rebase` 其次读出；都没有配置时为 `None`。
+#[test]
+fn the_pull_mode_reads_the_branch_setting_first() {
+    let Some(git) = unconfigured_git() else {
+        return;
+    };
+    let dir = crate::test_util::scratch("git-pull-mode");
+    let sh = |args: &[&str]| {
+        let ok = Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(args)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "git {args:?}");
+    };
+    sh(&["init", "-q", "-b", "main"]);
+    assert_eq!(git.pull_rebases(&dir), None);
+    sh(&["config", "pull.rebase", "merges"]);
+    assert_eq!(git.pull_rebases(&dir), Some(true));
+    sh(&["config", "branch.main.rebase", "false"]);
+    assert_eq!(git.pull_rebases(&dir), Some(false));
+    let _ = std::fs::remove_dir_all(&dir);
 }

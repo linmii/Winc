@@ -32,6 +32,24 @@ pub fn reveal(text: &str, caret: Option<usize>, insert: Option<&str>) -> Block {
             ..Inline::default()
         });
     }
+    // 空段落（块之间多出的空行）上组字：只有组字的文字。
+    if text.trim().is_empty()
+        && let (Some(_), Some(insert)) = (caret, insert)
+    {
+        let mut out = Out {
+            insert: Some((0, insert.to_owned())),
+            ..Out::default()
+        };
+        // 组字的文字对应段落的起点，光标和候选框排在组字之后。
+        out.map.push(0, 0, 0);
+        out.flush();
+        return Block::Paragraph(Inline {
+            text: out.text,
+            runs: out.runs,
+            map: out.map,
+            ..Inline::default()
+        });
+    }
     let parsed = parse(plain);
     let (heading, inline) = match parsed.blocks.as_slice() {
         [Block::Paragraph(inline)] => (None, inline),
@@ -67,6 +85,7 @@ pub fn reveal(text: &str, caret: Option<usize>, insert: Option<&str>) -> Block {
         let (at, src, len) = (a.text as usize, base + a.source as usize, a.len as usize);
         emit(&mut out, s..src.max(s), t..at.max(t));
         t = t.max(at);
+        s = s.max(src);
         if len > 0 {
             out.copy(inline, at..at + len, Some((src, &lines)), &elements, caret);
             t = at + len;
@@ -98,7 +117,8 @@ fn elements(plain: &str) -> Vec<Range<usize>> {
     let mut elements = Vec::new();
     // 行内代码和公式里的 `==` 是文字，不高亮。
     let mut code = Vec::new();
-    for (event, range) in Parser::new_ext(plain, options()).into_offset_iter() {
+    let masked = super::delims::mask(plain);
+    for (event, range) in Parser::new_ext(&masked, options()).into_offset_iter() {
         match &event {
             Event::Code(_) | Event::InlineMath(_) | Event::DisplayMath(_) => {
                 code.push(range.clone());
@@ -297,7 +317,7 @@ impl Out {
 
     /// 处理原文中未显示为文字的一段 `gap`（相对 `plain`），返回其中是否显示了内容。
     ///
-    /// 光标接触的元素显示其标记，其余标记和换行不显示（软换行生成的空格已在文字中）。`own` 为真时，
+    /// 光标接触的元素显示其标记，其余标记和换行不显示（软换行已在文字中）。`own` 为真时，
     /// 不属于任何元素的标记单独成为一处（emoji 短码）；否则按行拆分，每段单独成为一处
     /// （标题的 `#`、转义的 `\`）。
     fn gap(
@@ -327,8 +347,10 @@ impl Out {
                 None => {
                     let p = piece(i);
                     let p = gap.start + p.start..gap.start + p.end;
-                    // 行首、行尾的空白（续行的缩进、硬换行的两个空格）不视为标记。
-                    !plain[p.clone()].trim().is_empty() && touches(&p, caret)
+                    // 空白只在行尾且光标接触时显示。
+                    let blank = plain[p.clone()].trim().is_empty();
+                    let end = p.end == plain.len() || plain[p.end..].starts_with('\n');
+                    (!blank || end) && touches(&p, caret)
                 }
             };
             if show {

@@ -1,8 +1,12 @@
-//! 一行在行号栏里的部分：行号、Git 改动标记、逐行追溯、书签和折叠箭头。
+//! 一行在行号栏里的部分：行号、Git 改动标记、逐行追溯、书签、`.http` 文件发送请求的按钮和
+//! 折叠箭头。
 
 use winc_i18n::t;
 
 use super::*;
+
+/// LaTeX 编译出错的行在行号栏里画的红点的直径（逻辑像素）。
+const PROBLEM_DOT: f32 = 6.0;
 
 impl Screen<'_> {
     /// 行号；有光标的行颜色深一些。
@@ -38,7 +42,7 @@ impl Screen<'_> {
         );
     }
 
-    /// Git 改动：新增、修改的行在行号右边一道细色条（自动换行时盖住这一行的所有段），删掉的
+    /// Git 改动：新增、修改的行在行号右边一道细色条（自动换行时遮住这一行的所有段），删掉的
     /// 地方在两行之间绘制一个朝右的小三角。
     ///
     /// 颜色取差异视图的柔和色；卡片打开着的那一处、鼠标指着的那一处绘制宽一些。
@@ -83,74 +87,89 @@ impl Screen<'_> {
     }
 
     /// 逐行追溯：同一次提交连着的几行只在第一行写作者和时间，每一行左边一道按新旧深浅的色条；
-    /// 鼠标指着的那一次提交的几行字深一些。
+    /// 鼠标指着的那一次提交的几行铺一层底色，字深一些。
     pub(super) fn draw_blame(&self, frame: &mut Frame<'_>, row: &Row<'_>) {
-        let (app, p, gutter, lh) = (self.app, self.app.palette, self.gutter, self.lh);
-        let (line, blame_w) = (row.line, self.blame_w);
-        let (Some(blame), Some((oldest, newest))) = (self.blame, self.ages) else {
+        let (Some(blame), Some(ages)) = (self.blame, self.ages) else {
             return;
         };
-        let Some(&index) = blame.lines.get(line) else {
-            return;
-        };
-        let Some(commit) = blame.commits.get(index as usize) else {
-            return;
-        };
-        let column = Rect::new(gutter.x, gutter.y, blame_w, gutter.h);
-        let height = lh * row.breaks.rows() as f32;
-        let strength = if commit.uncommitted || newest == oldest {
-            1.0
-        } else {
-            (commit.time - oldest) as f32 / (newest - oldest) as f32
-        };
-        let bar_color = if commit.uncommitted {
-            p.diff_modified.mark
-        } else {
-            p.accent.alpha(p.accent.a * (0.12 + 0.7 * strength))
-        };
-        frame.rect_clipped(
-            Rect::new(gutter.x + 6.0, row.y, 3.0, height),
-            bar_color,
-            0.0,
+        let gutter = self.gutter;
+        let column = Rect::new(gutter.x, gutter.y, self.blame_w, gutter.h);
+        let height = self.lh * row.breaks.rows() as f32;
+        let cx = (blame, ages, self.blame_hover, self.now);
+        let label = (row.gutter_y, row.line.checked_sub(1));
+        draw_blame_cell(
+            self.app,
+            frame,
+            cx,
+            row.line,
             column,
+            (row.y, height, Some(label)),
         );
-        let first = line == 0 || blame.lines.get(line - 1) != Some(&index);
-        if first {
-            let gutter_y = row.gutter_y;
-            let hovered = self.blame_hover == Some(index);
-            let band = Rect::new(gutter.x, gutter_y, blame_w, lh);
-            let clip = Rect::new(gutter.x + 14.0, gutter_y, blame_w - 22.0, lh);
-            let (who, color) = if commit.uncommitted {
-                (t!("editor-blame-uncommitted").to_owned(), p.text_dim)
-            } else if hovered {
-                (commit.author.clone(), p.text)
-            } else {
-                (commit.author.clone(), p.text_muted)
-            };
-            let when = if commit.uncommitted {
-                String::new()
-            } else {
-                crate::app::git::blame::blame_time(commit, self.now)
-            };
-            let when_w = frame.measure(FontKind::Ui, app.fonts.ui_small, &when);
-            let when_x = gutter.x + blame_w - 10.0 - when_w;
-            let who_clip = Rect::new(clip.x, clip.y, (when_x - 8.0 - clip.x).max(0.0), lh);
-            ui_text_small(frame, app, clip.x, band, &who, color, who_clip);
-            let when_color = if hovered { p.text_muted } else { p.text_dim };
-            ui_text_small(frame, app, when_x, band, &when, when_color, column);
+    }
+
+    /// 书签绘制在行号左侧的空白处（开着逐行追溯时在那一栏右边），没有书签时画 LaTeX 的错误红点。
+    pub(super) fn draw_bookmark(&self, frame: &mut Frame<'_>, row: &Row<'_>) {
+        let gutter = self.gutter;
+        let center = (
+            gutter.x + self.blame_w + GUTTER_PADDING / 2.0 + 1.0,
+            row.gutter_y + self.lh / 2.0,
+        );
+        if self.doc.bookmarks().contains(row.line) {
+            icons::bookmark(frame, center, self.app.palette.accent, gutter);
+        } else if self.problems.binary_search(&row.line).is_ok() {
+            let r = PROBLEM_DOT / 2.0;
+            let dot = Rect::new(center.0 - r, center.1 - r, PROBLEM_DOT, PROBLEM_DOT);
+            frame.rect_clipped(dot, self.app.palette.error, r, gutter);
         }
     }
 
-    /// 书签绘制在行号左侧的空白处（开着逐行追溯时在那一栏右边）。
-    pub(super) fn draw_bookmark(&self, frame: &mut Frame<'_>, row: &Row<'_>) {
-        if self.doc.bookmarks().contains(row.line) {
-            let gutter = self.gutter;
-            let center = (
-                gutter.x + self.blame_w + GUTTER_PADDING / 2.0 + 1.0,
-                row.gutter_y + self.lh / 2.0,
-            );
-            icons::bookmark(frame, center, self.app.palette.accent, gutter);
+    /// `.http` 文件中请求行的发送按钮，位于书签的位置（该行有书签时不画），位置记入 `hits`。
+    ///
+    /// 发送中的请求转动（关闭动画效果时是静止的停止方块），点击即取消；刚结束的请求显示结果
+    /// （成功为对勾，失败为叉），随后淡回发送按钮。
+    pub(super) fn draw_http_run(&self, frame: &mut Frame<'_>, row: &Row<'_>, hits: &mut LineHits) {
+        use crate::app::editor::http::RunMark;
+
+        let Some(requests) = &self.http_requests else {
+            return;
+        };
+        if requests.binary_search(&row.line).is_err() || self.doc.bookmarks().contains(row.line) {
+            return;
         }
+        let (app, p, gutter) = (self.app, self.app.palette, self.gutter);
+        let button = Rect::new(
+            gutter.x + self.blame_w,
+            row.gutter_y,
+            GUTTER_PADDING,
+            self.lh,
+        );
+        if app.pointer.hover == Hover::HttpRun(row.line) {
+            frame.rect_clipped(button.inset(1.0, 1.0), p.hover, RADIUS_ROW, gutter);
+        }
+        let center = (button.x + button.w / 2.0, button.y + button.h / 2.0);
+        let mark = (self.http_mark)
+            .filter(|&(line, _)| line == row.line)
+            .map(|(_, mark)| mark);
+        match mark {
+            Some(RunMark::Running) if app.animations_on() => {
+                icons::spinner(frame, center, 4.0, icons::spin_turn(), p.git_added, gutter);
+            }
+            Some(RunMark::Running) => {
+                let stop = Rect::new(center.0 - 3.5, center.1 - 3.5, 7.0, 7.0);
+                frame.rect_clipped(stop, p.git_added, 1.0, gutter);
+            }
+            Some(RunMark::Done { ok, shown }) => {
+                frame.with_opacity(1.0 - shown, |frame| {
+                    icons::play_solid(frame, center, p.git_added, gutter);
+                });
+                frame.with_opacity(shown, |frame| match ok {
+                    true => icons::check(frame, center, 8.0, p.git_added, gutter),
+                    false => icons::close(frame, center, 7.0, p.error, gutter),
+                });
+            }
+            None => icons::play_solid(frame, center, p.git_added, gutter),
+        }
+        hits.push((button, row.line));
     }
 
     /// 折叠箭头：已折叠的行、鼠标在行号栏上时可折叠的行，以及动画中转动的那一个。
@@ -174,4 +193,91 @@ impl Screen<'_> {
             icons::chevron_turned(frame, center, 6.0, angle, self.app.palette.text_dim, gutter);
         }
     }
+}
+
+/// 逐行追溯中提交时间的范围（Unix 秒）：最旧的提交色条最淡，最新的最深。
+pub(in crate::view) fn blame_ages(blame: &Blame) -> (i64, i64) {
+    let times = blame
+        .commits
+        .iter()
+        .filter(|c| !c.uncommitted)
+        .map(|c| c.time);
+    (times.clone().min().unwrap_or(0), times.max().unwrap_or(0))
+}
+
+/// 逐行追溯一栏 `column` 中第 `line` 行的一格：色条从 `bar_y` 起高 `bar_h`（自动换行时跨几个
+/// 显示行）；`label` 是（作者和时间写在哪一行，上方紧挨着显示的是哪一行），这一行与上方的行
+/// 不是同一次提交时才写，为 `None` 时不写（自动换行的后几段）。`cx` 是（追溯结果，提交时间的
+/// 范围，鼠标所指的提交，当前时间）。编辑区和差异的追溯一栏共用。
+pub(in crate::view) fn draw_blame_cell(
+    app: &App,
+    frame: &mut Frame<'_>,
+    (blame, (oldest, newest), hover, now): (&Blame, (i64, i64), Option<u32>, i64),
+    line: usize,
+    column: Rect,
+    (bar_y, bar_h, label): (f32, f32, Option<(f32, Option<usize>)>),
+) {
+    let (p, lh, x, w) = (app.palette, app.fonts.line_height, column.x, column.w);
+    let Some(&index) = blame.lines.get(line) else {
+        return;
+    };
+    let Some(commit) = blame.commits.get(index as usize) else {
+        return;
+    };
+    let strength = if commit.uncommitted || newest == oldest {
+        1.0
+    } else {
+        (commit.time - oldest) as f32 / (newest - oldest) as f32
+    };
+    // 鼠标指着的那一次提交：它的每一行都铺一层底色。
+    if hover == Some(index) {
+        let band = Rect::new(x, bar_y, w, bar_h);
+        frame.rect_clipped(band, p.hover, 0.0, column);
+    }
+    let bar_color = if commit.uncommitted {
+        p.diff_modified.mark
+    } else {
+        p.accent.alpha(p.accent.a * (0.12 + 0.7 * strength))
+    };
+    frame.rect_clipped(
+        Rect::new(x + 6.0, bar_y, 3.0, bar_h),
+        bar_color,
+        0.0,
+        column,
+    );
+    let Some((label_y, above)) = label else {
+        return;
+    };
+    if above.is_some_and(|above| blame.lines.get(above) == Some(&index)) {
+        return;
+    }
+    let hovered = hover == Some(index);
+    let band = Rect::new(x, label_y, w, lh);
+    let clip = Rect::new(x + 14.0, label_y, w - 22.0, lh);
+    let (who, color) = if commit.uncommitted {
+        (t!("editor-blame-uncommitted").to_owned(), p.text_dim)
+    } else if hovered {
+        (commit.author.clone(), p.text)
+    } else {
+        (commit.author.clone(), p.text_muted)
+    };
+    let when = if commit.uncommitted {
+        String::new()
+    } else {
+        crate::app::git::blame::blame_time(commit, now)
+    };
+    let when_w = frame.measure(FontKind::Ui, app.fonts.ui_small, &when);
+    let when_x = x + w - 10.0 - when_w;
+    let who_clip = Rect::new(clip.x, clip.y, (when_x - 8.0 - clip.x).max(0.0), lh);
+    ui_text_small(
+        frame,
+        app,
+        clip.x,
+        band,
+        &who,
+        color,
+        who_clip.intersect(column),
+    );
+    let when_color = if hovered { p.text_muted } else { p.text_dim };
+    ui_text_small(frame, app, when_x, band, &when, when_color, column);
 }

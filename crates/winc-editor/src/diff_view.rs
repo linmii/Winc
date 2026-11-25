@@ -35,6 +35,18 @@ const INLINE_LIMIT: usize = 200;
 /// 依据实测：整篇断行约每 20 万行耗时 115 ms，每次编辑都要重新断行，行数更多时输入出现明显延迟。
 pub const WRAP_LINES: usize = 200_000;
 
+/// 差异一侧的逐行追溯取自哪里：仓库 `root` 里的文件 `path`，在提交 `rev` 中的版本；`rev` 为
+/// `None` 时是该侧的文字（工作区中的内容），改过还没提交的行算「未提交」。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlameSource {
+    /// 仓库的根目录。
+    pub root: PathBuf,
+    /// 文件的路径（在该版本中的路径，改名前后可能不同）。
+    pub path: PathBuf,
+    /// 提交号；`None` 是该侧的文字。
+    pub rev: Option<String>,
+}
+
 /// 差异的一侧。
 #[derive(Debug)]
 pub struct DiffSide {
@@ -48,6 +60,8 @@ pub struct DiffSide {
     ///
     /// 为 `true` 时文本为空，标题已说明原因，界面不再显示「空文件」。
     pub missing: bool,
+    /// 该侧可以逐行追溯时的来源；不是 Git 中的版本（比较两个文件、合并冲突）时为 `None`。
+    pub blame: Option<BlameSource>,
     /// 语法着色的增量状态，绘制时推进。
     pub highlighter: Highlighter,
     /// 文字的版本号：右侧随工作区文件改变时加 1，使按内容缓存的结果失效。
@@ -69,6 +83,7 @@ impl DiffSide {
             text: Rope::from_str(text),
             path,
             missing: false,
+            blame: None,
             highlighter: Highlighter::new(language),
             revision: 0,
             sticky_memo: ScopeMemo::default(),
@@ -79,6 +94,17 @@ impl DiffSide {
     pub fn with_missing(mut self, missing: bool) -> DiffSide {
         self.missing = missing;
         self
+    }
+
+    /// 设置逐行追溯的来源（见 [`BlameSource`]）；版本中不存在该文件时不追溯。
+    pub fn with_blame(mut self, source: BlameSource) -> DiffSide {
+        self.blame = (!self.missing).then_some(source);
+        self
+    }
+
+    /// 文字的版本号：文字每变一次加 1。
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// 返回该侧自上而下显示 `rows` 各行时固定在顶部的块（从外层到内层，最多 `max` 个），以及
@@ -228,7 +254,7 @@ impl Compared {
     }
 }
 
-/// 单栏时滚动位置与各侧显示行之间的换算表。
+/// 单栏时（以及并排且两侧按改动对齐时）滚动位置与各侧显示行之间的换算表。
 ///
 /// 从差异中取出后单独持有：绘制时需要同时修改差异两侧的着色状态。
 #[derive(Debug, Clone)]
@@ -250,6 +276,18 @@ impl UnifiedMap {
             };
             return start + before + row - from[side];
         }
+        let (at, last) = i
+            .checked_sub(1)
+            .map_or((0.0, 0.0), |i| (self.0[i].0, self.0[i].1[side]));
+        at + row - last
+    }
+
+    /// 并排且两侧按改动对齐时（见 [`DiffView::aligned`]），第 `side` 侧显示行 `row` 的位置。
+    ///
+    /// 每段改动占两侧中较多的行数，两侧都从这一段的开头排起，较短的一侧在下面留空；改动之外
+    /// 两侧逐行对应。
+    pub fn aligned_pos(&self, side: usize, row: f64) -> f64 {
+        let i = self.0.partition_point(|k| k.1[side] <= row);
         let (at, last) = i
             .checked_sub(1)
             .map_or((0.0, 0.0), |i| (self.0[i].0, self.0[i].1[side]));
@@ -335,6 +373,29 @@ pub struct DiffView {
     ///
     /// 历史版本不能按块提交，因此不写入 [`DiffView::repo_path`]。
     pub snapshot_path: Option<PathBuf>,
+    /// 标题栏上方的提交说明条：差异来自日志里的提交时有。
+    pub banner: Option<DiffBanner>,
+    /// 提交说明条下面左侧文件栏展开时的宽度（逻辑像素）；没有文件栏时为 0。
+    pub panel: f32,
+    /// 文件栏露出的比例：收起为 0，展开为 1，展开、收起途中在两者之间。
+    pub panel_shown: f32,
+    /// 左、右两侧是否显示逐行追溯一栏（只有设置了 [`DiffSide::blame`] 的一侧能显示）。
+    pub blamed: [bool; 2],
+    /// 并排时两侧是否按改动对齐（见 [`UnifiedMap::aligned_pos`]），而不是在视口中线对齐。
+    ///
+    /// 多个文件的差异上下排在一起时用：每段改动在较短的一侧留空，整段内容不随滚动错位。
+    pub aligned: bool,
+}
+
+/// 差异标题栏上方的提交说明条的内容。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffBanner {
+    /// 提交号，比较两个版本时是「旧…新」。
+    pub version: String,
+    /// 提交说明的第一行；比较两个版本时为空。
+    pub subject: String,
+    /// 作者和时间；比较两个版本时为空。
+    pub detail: String,
 }
 
 impl DiffView {
@@ -370,6 +431,11 @@ impl DiffView {
             keys,
             repo_path: None,
             snapshot_path: None,
+            banner: None,
+            panel: 0.0,
+            panel_shown: 1.0,
+            blamed: [false; 2],
+            aligned: false,
         };
         view.layout();
         view
@@ -403,6 +469,23 @@ impl DiffView {
         self.new.text = text;
         // 右侧已替换为编辑器中的内容，文件必然存在，即使内容为空。
         self.new.missing = false;
+        self.take_compared(compared);
+    }
+
+    /// 把左侧替换为 `text` 并重新比较：左侧是暂存区的差异在暂存一段之后使用。
+    pub fn set_old_text(&mut self, text: Rope) {
+        let compared = Compared::new(&text, &self.new.text);
+        let first = first_difference(&self.old.text, &text);
+        self.old.highlighter.invalidate_from(first);
+        self.old.sticky_memo.edited(self.old.revision, first);
+        self.old.revision += 1;
+        self.old.text = text;
+        self.old.missing = false;
+        self.take_compared(compared);
+    }
+
+    /// 采用一侧替换后的比较结果 `compared`：改动的段数变化时，已展开的折叠和聚焦的改动作废。
+    fn take_compared(&mut self, compared: Compared) {
         if compared.hunks.len() != self.hunks.len() {
             self.expanded.clear();
             self.focus = None;
@@ -430,10 +513,17 @@ impl DiffView {
         self.collapse = old.collapse;
         self.unified = old.unified;
         self.wrap = old.wrap;
+        self.keep_blame(old);
         if old.hunks.len() == self.hunks.len() {
             self.expanded = old.expanded.clone();
         }
         self.layout();
+    }
+
+    /// 同一个标签换成这个差异时，沿用原差异 `old` 逐行追溯的开关：开着时两侧中能追溯的都打开。
+    pub fn keep_blame(&mut self, old: &DiffView) {
+        let on = old.blamed.contains(&true);
+        self.blamed = [LEFT, RIGHT].map(|s| on && self.side(s).blame.is_some());
     }
 
     /// 设置自动换行：`wrap` 是（断行宽度，Tab 宽度），单位是显示列，`None` 表示不换行。
@@ -639,6 +729,26 @@ impl DiffView {
             self.unified = on;
             self.layout();
         }
+    }
+
+    /// 两侧按改动对齐时（[`DiffView::aligned`]），第 `side` 侧落在位置 `from..to` 之间的
+    /// 显示行（含露出一部分的行）。
+    pub fn aligned_rows(&self, side: usize, from: f64, to: f64) -> Range<usize> {
+        let map = self.unified_map();
+        let at = |row: usize| map.aligned_pos(side, row as f64);
+        let len = self.rows[side].len();
+        // 位置随行号递增：二分找第一个下沿超过 `from` 的行。
+        let (mut start, mut hi) = (0, len);
+        while start < hi {
+            let mid = (start + hi) / 2;
+            if at(mid) + 1.0 <= from {
+                start = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        let end = (start..len).find(|&row| at(row) >= to).unwrap_or(len);
+        start..end
     }
 
     /// 返回单栏时滚动位置与各侧显示行之间的换算表。

@@ -10,6 +10,15 @@ use crate::app::NoticeKind;
 use crate::app::git::branch::{Then, keep_changes};
 use crate::app::lifecycle::notice::NoticeAction;
 
+/// 回滚的目标。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RollbackTo {
+    /// `HEAD`：放弃暂存区和工作区中的更改。
+    Head,
+    /// 暂存区：只放弃工作区中的更改。
+    Index,
+}
+
 /// 分支行右端同步控件的状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SyncState {
@@ -21,9 +30,9 @@ pub(crate) enum SyncState {
     InSync,
     /// 分支还没有上游：发布到远程。
     Publish,
-    /// 领先上游这么多个提交：推送。
+    /// 领先上游 `n` 个提交：推送。
     Push(u32),
-    /// 落后上游这么多个提交：拉取。
+    /// 落后上游 `n` 个提交：拉取。
     Pull(u32),
     /// 两边都有新提交：同步。
     Both {
@@ -49,7 +58,7 @@ pub(crate) enum PushIntent {
 /// 全部提交在「查看提交」打开的日志里。
 pub(crate) const PUSH_PREVIEW: usize = 8;
 
-/// 提交成功后按钮显示「✓ 已提交」的时长（经验值）。
+/// 提交成功后按钮显示「✓ 已提交」的时长（取自调参）。
 ///
 /// 短于状态栏提示的显示时长，足以让用户确认提交已完成。
 pub(in crate::app) const COMMITTED_SHOWN: Duration = Duration::from_millis(1600);
@@ -97,7 +106,7 @@ impl App {
     }
 
     /// 在后台同步（[`winc_editor::git::Git::sync`]）；需要强制推送而 `force` 为假时转为询问。
-    /// 确认强制推送以后，询问前一并提交了的其他仓库照样推送出去。
+    /// 确认强制推送以后，询问前一并提交了的其他仓库仍然推送出去。
     pub(in crate::app) fn run_git_sync(&mut self, force: bool) {
         let others = match force {
             true => std::mem::take(&mut self.git.commit.force_others),
@@ -110,9 +119,11 @@ impl App {
     /// 需要先确认强制推送时记下 `others`，确认以后再推（见 [`App::run_git_sync`]）。
     fn run_git_sync_with(&mut self, others: Vec<PathBuf>, force: bool) {
         self.git.commit.force_others = others.clone();
+        let rebase = self.pull_mode();
         self.git_operate_then(t!("git-op-sync").into(), move |git, root| {
-            let (synced, then) =
-                keep_changes(git, root, t!("git-op-sync"), |git| git.sync(root, force))?;
+            let (synced, then) = keep_changes(git, root, t!("git-op-sync"), |git| {
+                git.sync(root, force, rebase)
+            })?;
             Ok(match synced {
                 Synced::Done(summary) => {
                     push_others(git, &others)?;
@@ -130,6 +141,18 @@ impl App {
             self.run_push(intent);
             return;
         }
+        self.preview_push(intent);
+    }
+
+    /// 「推送到…」：不论 `git.confirmPush`，都打开推送对话框选远程和目标分支。
+    pub(in crate::app) fn push_to(&mut self) {
+        if let Some(intent) = self.push_intent() {
+            self.preview_push(intent);
+        }
+    }
+
+    /// 在后台读出 `intent` 会送出的提交，读到以后确认（[`App::take_push_preview`]）。
+    fn preview_push(&mut self, intent: PushIntent) {
         // 先在后台读出会送出的提交，读到以后再问（[`App::take_push_preview`]）：确认框里列出它们，
         // 推送之前看得到送出去的是什么。
         let slot = Arc::clone(&self.git.push_preview);
@@ -141,7 +164,7 @@ impl App {
                 PushIntent::Publish(_) => winc_editor::git::Outgoing::Publish,
                 _ => winc_editor::git::Outgoing::Upstream,
             };
-            let read = (tool.ok()).map(|git| git.outgoing(&root, target, PUSH_PREVIEW));
+            let read = (tool.ok()).map(|git| git.outgoing(&root, target, "HEAD", PUSH_PREVIEW));
             let (subjects, total) = read.and_then(Result::ok).unwrap_or_default();
             *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some((intent, subjects, total));
         });
@@ -204,14 +227,16 @@ impl App {
         self.run_push(intent);
     }
 
-    /// 推送对话框按了主按钮：推到 `remote` 的分支 `target`，`tags` 为真时一并推送全部标签；
-    /// 勾选了「不再询问」（`never`）时写入配置。
+    /// 推送对话框按了主按钮：把 `upto`（`None` 时是 `HEAD`）推到 `remote` 的分支 `target`，
+    /// `tags` 为真时一并推送全部标签；勾选了「不再询问」（`never`）时写入配置。
     ///
-    /// 目标没有改、也不推送标签时与直接推送相同（[`App::run_push`]）；发布时把目标设为上游。
+    /// 推送 `HEAD`、目标仍是打开时的 `defaults`、也不推送标签时与直接推送相同
+    /// （[`App::run_push`]）；发布时把目标设为上游。
     pub(in crate::app) fn submit_push(
         &mut self,
-        form: super::super::form::PushForm,
-        (remote, target): (String, String),
+        intent: PushIntent,
+        defaults: (String, String),
+        (upto, remote, target): (Option<String>, String, String),
         tags: bool,
         never: bool,
     ) {
@@ -219,14 +244,15 @@ impl App {
             self.config.git_confirm_push = Some(false);
             self.save_config();
         }
-        if !tags && remote == form.remote && target == form.target {
-            self.run_push(form.intent);
+        if upto.is_none() && !tags && (&remote, &target) == (&defaults.0, &defaults.1) {
+            self.run_push(intent);
             return;
         }
-        let track = matches!(form.intent, PushIntent::Publish(_));
+        let track = matches!(intent, PushIntent::Publish(_));
         // 同步改了目标或要一并推送标签：仍然先拉取（与同步相同），再按对话框推送，本地落后上游
         // 时推送才不会被拒绝。
-        let sync = matches!(form.intent, PushIntent::Sync);
+        let sync = matches!(intent, PushIntent::Sync);
+        let rebase = self.pull_mode();
         let what = if sync {
             t!("git-op-sync")
         } else {
@@ -234,11 +260,25 @@ impl App {
         };
         self.git_operate_then(what.into(), move |git, root| {
             let then = match sync {
-                true => keep_changes(git, root, t!("git-op-pull"), |git| git.pull(root))?.1,
+                true => keep_changes(git, root, t!("git-op-pull"), |git| git.pull(root, rebase))?.1,
                 false => Then::Nothing,
             };
-            let summary = git.push_to(root, &remote, &target, tags, track)?;
+            let head = upto.as_deref().unwrap_or("HEAD");
+            let summary = git.push_to(root, (head, &remote, &target), tags, track)?;
             Ok((summary, then))
+        });
+    }
+
+    /// 拉取对话框按了主按钮：从 `remote` 的分支 `branch` 拉取到当前分支，`rebase` 为真时变基。
+    pub(in crate::app) fn submit_pull(&mut self, (remote, branch): (String, String), rebase: bool) {
+        let what = match rebase {
+            true => t!("git-op-pull-rebase"),
+            false => t!("git-op-pull"),
+        };
+        self.git_operate_then(what.into(), move |git, root| {
+            keep_changes(git, root, what, |git| {
+                git.pull_from(root, &remote, &branch, rebase)
+            })
         });
     }
 
@@ -415,6 +455,24 @@ impl App {
     /// 没写提交信息、没有可以提交的内容时在状态栏说明，不提交。冲突已解决（不再有冲突标记）的
     /// 文件随提交加入暂存区。
     pub(in crate::app) fn git_commit(&mut self) {
+        // 这是一次新的、不推送的提交；已有提交在进行或等待时不改它的意图。
+        if !self.git.commit.pending() {
+            self.git.commit.drop_push_intent();
+        }
+        self.git_commit_resumed();
+    }
+
+    /// 开始或继续进行提交（暂存写完、整理或检查做完之后），「提交以后推送」的意图保留；
+    /// 提交没有开始、也没有在等待时放弃该意图。
+    pub(super) fn git_commit_resumed(&mut self) {
+        self.commit_attempt();
+        if !self.git.commit.pending() {
+            self.git.commit.drop_push_intent();
+        }
+    }
+
+    /// [`App::git_commit`] 的一次尝试：返回时提交已在后台进行、在等暂存写完，或没有开始。
+    fn commit_attempt(&mut self) {
         if self.git.commit.busy {
             return;
         }
@@ -423,7 +481,7 @@ impl App {
             self.git.commit.commit_queued = true;
             return;
         }
-        // 提交前先格式化、再检查新增的 TODO：都在后台进行，做完再接着提交（见
+        // 提交前先格式化、再检查新增的 TODO：都在后台进行，做完再随后提交（见
         // `App::reformatted`、`App::todo_checked`）。
         if self.reformat_first() || self.check_todo_first() {
             return;
@@ -590,33 +648,53 @@ impl App {
         self.run_branch_command(crate::app::input::context_menu::MenuCommand::GitSkip);
     }
 
-    /// 回滚前先确认（系统确认框）；确认后回滚组 `group` 中勾上的文件，没有勾上的文件时回滚
-    /// 该组的全部文件。
+    /// 确认后回滚组 `group`：暂存区视图中为组内全部文件，勾选式下为勾选的文件。
     pub(super) fn ask_rollback(&mut self, group: CommitGroup) {
         let Some(status) = self.git.status.as_ref() else {
             return;
         };
         let staging = self.git.commit.staging();
-        let held = || status.entries.iter().filter(|e| group.holds(e, staging));
-        let mut paths: Vec<PathBuf> = held()
-            .filter(|e| self.git.commit.checked(e))
+        let paths: Vec<PathBuf> = status
+            .entries
+            .iter()
+            .filter(|e| group.holds(e, staging))
+            .filter(|e| staging || self.git.commit.checked(e))
             .map(|e| e.path.clone())
             .collect();
-        // 勾选式下只回滚勾上的文件；暂存区视图中组里没有已暂存的文件时回滚整组。
-        if paths.is_empty() && !self.git.commit.staging() {
+        if paths.is_empty() && !staging {
             self.flash(t!("git-rollback-nothing-checked"));
-            return;
-        }
-        if paths.is_empty() {
-            paths = held().map(|e| e.path.clone()).collect();
-        }
-        if !paths.is_empty() {
-            self.confirm_rollback(paths);
+        } else if !paths.is_empty() {
+            self.confirm_commit_rollback(paths);
         }
     }
 
-    /// 先请用户确认，确认后回滚 `paths`。
+    /// 确认后回滚提交视图中的 `paths`。
+    ///
+    /// 暂存区视图中回滚到暂存区，略过没有未暂存更改的文件；勾选式下回滚到 `HEAD`。
+    pub(in crate::app) fn confirm_commit_rollback(&mut self, paths: Vec<PathBuf>) {
+        if !self.git.commit.staging() {
+            self.confirm_rollback(paths);
+            return;
+        }
+        let entries = self.git.status.iter().flat_map(|s| &s.entries);
+        let unstaged: Vec<PathBuf> = entries
+            .filter(|e| e.unstaged.is_some() && !e.conflicted() && paths.contains(&e.path))
+            .map(|e| e.path.clone())
+            .collect();
+        if unstaged.is_empty() {
+            self.flash(t!("git-rollback-nothing-unstaged"));
+            return;
+        }
+        self.confirm_rollback_to(unstaged, RollbackTo::Index);
+    }
+
+    /// 确认后把 `paths` 回滚到 `HEAD`。
     pub(in crate::app) fn confirm_rollback(&mut self, paths: Vec<PathBuf>) {
+        self.confirm_rollback_to(paths, RollbackTo::Head);
+    }
+
+    /// 确认后把 `paths` 回滚到 `to`。
+    fn confirm_rollback_to(&mut self, paths: Vec<PathBuf>, to: RollbackTo) {
         let message = match paths.as_slice() {
             [one] => {
                 let name = winc_editor::display_name(one);
@@ -627,26 +705,27 @@ impl App {
         if self.window.handle.is_some() {
             // 远端主机上没有废纸篓：未跟踪的文件直接删除。
             let remote = paths.iter().any(|path| winc_backend::is_remote(path));
-            let detail = if remote {
-                t!("git-rollback-confirm-detail-remote")
-            } else {
-                t!("git-rollback-confirm-detail")
+            let detail = match (to, remote) {
+                (RollbackTo::Head, false) => t!("git-rollback-confirm-detail"),
+                (RollbackTo::Head, true) => t!("git-rollback-confirm-detail-remote"),
+                (RollbackTo::Index, false) => t!("git-rollback-confirm-detail-index"),
+                (RollbackTo::Index, true) => t!("git-rollback-confirm-detail-index-remote"),
             };
             let button = t!("git-rollback-confirm-button");
             self.show_confirm(&message, detail, button, move |ok| {
-                ok.then(|| UserEvent::GitRollback(paths.clone()))
+                ok.then(|| UserEvent::GitRollback(paths.clone(), to))
             });
             return;
         }
         // 没有窗口（测试中）时直接回滚。
-        self.git_rollback(paths);
+        self.git_rollback(paths, to);
     }
 
-    /// 回滚 `paths`：已跟踪的恢复成 `HEAD` 里的内容，新加入版本管理的从暂存区移除并移到废纸篓，
-    /// 未跟踪的移到废纸篓。
+    /// 把 `paths` 回滚到 `to`，未跟踪的文件移到废纸篓。
     ///
-    /// 打开着的文档由目录监视仍然重新读取。
-    pub(in crate::app) fn git_rollback(&mut self, paths: Vec<PathBuf>) {
+    /// 回滚到 `HEAD` 时，新加入版本管理的文件从暂存区移除并移到废纸篓。已打开的文档由目录监视
+    /// 重新读取。
+    pub(in crate::app) fn git_rollback(&mut self, paths: Vec<PathBuf>, to: RollbackTo) {
         let Some(status) = self.git.status.as_ref() else {
             return;
         };
@@ -656,6 +735,8 @@ impl App {
         for entry in status.entries.iter().filter(|e| paths.contains(&e.path)) {
             if entry.untracked() {
                 trash.push(entry.path.clone());
+            } else if to == RollbackTo::Index {
+                restore.push(entry.path.clone());
             } else if entry.staged == Some(winc_editor::git::Change::Added) {
                 added.push(entry.path.clone());
                 trash.push(entry.path.clone());
@@ -704,7 +785,10 @@ impl App {
         self.git.commit.busy = true;
         self.run_git_job(move |git, root| {
             let result = git
-                .and_then(|git| git.rollback(root, &restore, &added))
+                .and_then(|git| match to {
+                    RollbackTo::Head => git.rollback(root, &restore, &added),
+                    RollbackTo::Index => git.discard_unstaged(root, &restore),
+                })
                 .map(|()| count);
             let _ = sender.send(Outcome::RolledBack(result, root.to_path_buf()));
         });
@@ -770,9 +854,9 @@ impl App {
                                 }
                             }
                             // 勾上的都提交了；取消勾选的各处改动还在工作区里，下次重新勾选。
-                            self.git.commit.skipped.clear();
                             self.git.commit.reset_checks();
                             self.git.commit.amend = false;
+                            self.finish_commit_into(&message);
                             self.git.commit.no_verify = false;
                             self.git.commit.draft = None;
                             if left > 0 {
@@ -788,8 +872,7 @@ impl App {
                                 Some((short, Instant::now() + COMMITTED_SHOWN));
                         }
                         Err(e) => {
-                            self.git.commit.push_after = false;
-                            self.git.commit.sync_after = false;
+                            self.git.commit.drop_push_intent();
                             self.git.commit.committed_with.clear();
                             self.git.commit.others_left = 0;
                             self.notify_with(
@@ -808,7 +891,7 @@ impl App {
                 Outcome::Staged(result, root) => self.staging_finished(result, &root),
                 Outcome::OtherStaged(result) => self.other_staging_finished(result),
                 Outcome::TodoChecked(count, root) => self.todo_checked(count, &root),
-                Outcome::Reformatted(count, root) => self.reformatted(count, &root),
+                Outcome::Reformatted(count, failed, root) => self.reformatted(count, failed, &root),
                 Outcome::IndexText(root, path, version, text) => {
                     self.index_text_arrived(&root, path, version, text);
                 }
@@ -884,7 +967,7 @@ impl App {
         self.git.commit.other_skipped = old.other_skipped;
         self.git.commit.other_heads = old.other_heads;
         self.git.commit.other_folds = old.other_folds;
-        // 写入其他仓库暂存区的操作按仓库的路径进行，与当前是哪个仓库无关：换仓库时接着做完，
+        // 写入其他仓库暂存区的操作按仓库的路径进行，与当前是哪个仓库无关：换仓库时继续做完，
         // 界面上已经按做完的结果显示了。
         self.git.commit.other_stage_queue = old.other_stage_queue;
         self.git.commit.other_stage_running = old.other_stage_running;

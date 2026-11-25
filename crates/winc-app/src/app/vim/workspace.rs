@@ -84,15 +84,7 @@ impl App {
             Focus::Tree => self.on_key_tree(&key),
             Focus::Results => self.results_key(&key),
             Focus::Outline => self.outline_key(&key),
-            // 历史提交的文件列表借用提交视图的列表。
-            _ => {
-                if self
-                    .with_log_list(|app| app.commit_list_key(&key))
-                    .is_none()
-                {
-                    self.commit_list_key(&key);
-                }
-            }
+            _ => self.commit_list_key(&key),
         }
         self.request_redraw();
         true
@@ -164,7 +156,7 @@ impl App {
         if self.state.vim_marks.contains(&entry) {
             return;
         }
-        self.update_state(|state| {
+        self.update_state(move |state| {
             state.vim_marks.retain(|mark| mark.0 != name);
             state.vim_marks.push(entry);
             state.vim_marks.sort();
@@ -218,7 +210,7 @@ impl App {
             (searches.to_vec(), commands.to_vec())
         };
         if self.state.vim_searches != searches || self.state.vim_commands != commands {
-            self.update_state(|state| {
+            self.update_state(move |state| {
                 state.vim_searches = searches;
                 state.vim_commands = commands;
             });

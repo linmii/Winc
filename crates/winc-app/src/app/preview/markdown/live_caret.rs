@@ -40,10 +40,17 @@ impl App {
                 .iter()
                 .rposition(|r| r.start <= at && at < r.end.max(r.start + 1))
         };
+        // 叶子块的终点，含同一行末尾的空格。
+        let tail = |p: &std::ops::Range<usize>| {
+            let end = shift(p.end).max(p.start);
+            let open = end > p.start && rope.byte(end - 1) != b'\n';
+            let spaces = rope.bytes_at(end).take_while(|b| matches!(b, b' ' | b'\t'));
+            end + if open { spaces.count() } else { 0 }
+        };
         let prev = i.checked_sub(1).map(|k| &parsed.leaves[k]);
         let next = parsed.leaves.get(i);
         let (found, leaf, gap) = match (prev.map(|l| &l.range), next.map(|l| &l.range)) {
-            (Some(p), _) if caret <= shift(p.end).max(p.start) => (p, p.start..shift(p.end), false),
+            (Some(p), _) if caret <= tail(p) => (p, p.start..tail(p), false),
             // 光标在块的标记上（引用的 `>`、提示块的 `[!NOTE]`、列表的序号），尚未到达其第一个
             // 叶子块：取该叶子块，从光标所在行显示原文。
             (_, Some(n)) if block_of(n.start).is_some() && block_of(n.start) == block_of(caret) => {
@@ -130,7 +137,10 @@ impl App {
             } else {
                 byte < live.leaf.start
             };
-        let blank = |line: usize| rope.line(line).chars().all(char::is_whitespace);
+        // 显示为空段落的空行（见 `Markdown::with_blank_lines`）是光标可以停留的一行。
+        let blank = |line: usize| {
+            rope.line(line).chars().all(char::is_whitespace) && !self.live_blank_line(line)
+        };
         let mut line = rope.char_to_line(next);
         let mut target = next;
         if outside && blank(line) {
@@ -145,7 +155,9 @@ impl App {
                 while blank(line) && line > 0 {
                     line -= 1;
                 }
-                if !blank(line) {
+                if self.live_blank_line(line) {
+                    target = rope.line_to_char(line);
+                } else if !blank(line) {
                     target = line_end(rope, line);
                 }
             }
@@ -165,6 +177,27 @@ impl App {
         self.reset_blink();
         self.request_redraw();
         true
+    }
+
+    /// 第 `line` 行是否为显示成空段落的空行（见 `Markdown::with_blank_lines`）；解析结果不是
+    /// 当前版本时为 `false`。
+    pub(super) fn live_blank_line(&self, line: usize) -> bool {
+        let Some(doc) = self.editor.active() else {
+            return false;
+        };
+        let (Some(parsed), Some(rope)) = (self.preview.markdown.parsed.as_ref(), doc.text().rope())
+        else {
+            return false;
+        };
+        if self.preview.markdown.checked != Some(doc.revision) || line >= rope.len_lines() {
+            return false;
+        }
+        let start = rope.line_to_byte(line);
+        let i = parsed.leaves.partition_point(|l| l.range.start < start);
+        parsed
+            .leaves
+            .get(i)
+            .is_some_and(|l| l.range.start == start && l.range.is_empty())
     }
 
     /// 原文第 `at` 个字节所在的叶子块是否为正文（段落、标题）；不在任何叶子块中时为
@@ -604,8 +637,12 @@ impl App {
             // 打字机模式：平滑地滚到光标所在的行停在中间。
             let view = self.preview.markdown.area.h;
             let to = (y + h / 2.0 - view / 2.0).max(0.0);
-            if (to - self.preview.markdown.scroll()).abs() >= 1.0 {
-                self.glide_pane_to(ScrollTarget::Markdown, to);
+            let before = self.preview.markdown.scroll();
+            if (to - before).abs() >= 1.0 {
+                // 每换一行都平滑滚动，不论距离远近。
+                self.set_pane_scroll(ScrollTarget::Markdown, to);
+                let min = crate::app::scroll::editor::TYPEWRITER_MIN as f32;
+                self.glide_pane_over(ScrollTarget::Markdown, before, min);
             }
             return;
         }

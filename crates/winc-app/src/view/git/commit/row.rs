@@ -20,15 +20,13 @@ struct RowBox<'a> {
     full: Option<CommitOverflow>,
     /// 全名伸出侧栏的那一段；没有伸出时为 `None`。
     spill: Option<Rect>,
-    /// 这一行的名字是否显示全名。按行判断，不看位置：固定在顶部的行与列表中被它盖住的
+    /// 这一行的名字是否显示全名。按行判断，不看位置：固定在顶部的行与列表中被它遮住的
     /// 那一行相同。
     wanted: bool,
     /// 名字的显示方式变化的原因，交给名字的过渡状态。
     cause: LabelCause,
     /// 键盘焦点是否在改动列表上。
     focused: bool,
-    /// 是否在浏览历史提交的文件：此时没有勾选框，也没有回滚、打开文件等按钮。
-    browse: bool,
     /// 是否在暂存区视图中：此时没有勾选框，行尾是暂存、取消暂存的按钮。
     staging: bool,
     /// 整个改动列表多缩进的层数（见 [`App::commit_base_level`]）。
@@ -47,9 +45,9 @@ impl RowBox<'_> {
         self.arrow_x(level) + check_gap(app)
     }
 
-    /// 在 `(x, cy)` 画勾选框；浏览历史提交时不画。
+    /// 在 `(x, cy)` 画勾选框；暂存区视图中不画。
     fn checkbox(&self, app: &App, frame: &mut Frame<'_>, x: f32, cy: f32, state: Option<bool>) {
-        if self.browse || self.staging {
+        if self.staging {
             return;
         }
         let p = app.palette;
@@ -66,9 +64,9 @@ impl RowBox<'_> {
         );
     }
 
-    /// 记下勾选框的命中区域；浏览历史提交时没有勾选框，不记录。
+    /// 记下勾选框的命中区域；暂存区视图中没有勾选框，不记录。
     fn check_hit(&self, hits: &mut Vec<(Rect, CommitTarget)>, rect: Rect, target: CommitTarget) {
-        if !self.browse && !self.staging {
+        if !self.staging {
             hits.push((rect.intersect(self.cx.list), target));
         }
     }
@@ -117,7 +115,6 @@ pub(super) fn draw_row(
             current: 0,
         },
         focused: app.focus == Focus::CommitList,
-        browse: app.git.commit.browse,
         staging: app.git.commit.staging(),
         base: app.commit_base_level(),
     };
@@ -143,7 +140,26 @@ pub(super) fn draw_row(
     }
 }
 
-/// 画分组的标题行：箭头、勾选框、标题，右端是文件数，悬停时换成「回滚」按钮。
+/// 组标题悬停时右端的两个按钮，位置同文件行的按钮；返回 `None` 时显示文件数。
+///
+/// 冲突组没有按钮：回滚会丢失解决到一半的内容。
+fn group_actions(
+    group: CommitGroup,
+    staging: bool,
+    checked: bool,
+) -> Option<[Option<CommitTarget>; 2]> {
+    match (group, staging) {
+        (CommitGroup::Conflicts, _) => None,
+        (CommitGroup::Staged, true) => Some([None, Some(CommitTarget::GroupStage(group))]),
+        (_, true) => Some([
+            Some(CommitTarget::GroupRevert(group)),
+            Some(CommitTarget::GroupStage(group)),
+        ]),
+        (_, false) => checked.then_some([None, Some(CommitTarget::GroupRevert(group))]),
+    }
+}
+
+/// 画分组的标题行：箭头、勾选框、标题和文件数，悬停时文件数换成按钮（见 [`group_actions`]）。
 fn draw_group_row(
     app: &App,
     frame: &mut Frame<'_>,
@@ -156,12 +172,7 @@ fn draw_group_row(
         list, status, rows, ..
     } = *r.cx;
     let RowBox {
-        i,
-        y,
-        band,
-        shade,
-        browse,
-        ..
+        i, y, band, shade, ..
     } = *r;
     let cy = y + COMMIT_ROW / 2.0;
     let hovered = matches!(
@@ -195,18 +206,12 @@ fn draw_group_row(
         p.text_muted,
         list,
     );
-    // 悬停时右端的文件数换成「回滚」，回滚这一组里勾上的文件，位置和文件行悬停时的按钮
-    // 相同。冲突组没有：回滚冲突的文件会丢掉解决到一半的内容。
-    // 暂存区视图中这个位置是「暂存全部」，「已暂存的更改」一组是「全部取消暂存」。
-    let staging = r.staging;
-    let acts = hovered && !browse && group != CommitGroup::Conflicts;
-    let revert = (acts && (staging || state.is_some())).then(|| file_actions(band).1);
-    match revert {
-        Some(rect) => {
-            let target = if staging {
-                CommitTarget::GroupStage(group)
-            } else {
-                CommitTarget::GroupRevert(group)
+    let actions = group_actions(group, r.staging, state.is_some()).filter(|_| hovered);
+    if let Some(actions) = actions {
+        let (first, last) = file_actions(band);
+        for (rect, target) in [first, last].into_iter().zip(actions) {
+            let Some(target) = target else {
+                continue;
             };
             let on = app.pointer.hover == Hover::Commit(target);
             draw_button(frame, p, rect, list, on, false);
@@ -214,7 +219,8 @@ fn draw_group_row(
             draw_action_icon(frame, target, center(rect), color, list);
             hits.push((rect.intersect(list), target));
         }
-        None => draw_count_pill(app, frame, band, &members.len().to_string(), list),
+    } else {
+        draw_count_pill(app, frame, band, &members.len().to_string(), list);
     }
     let check = Rect::new(group_check - 8.0, y + 4.0, 16.0, 16.0);
     r.check_hit(hits, check, CommitTarget::GroupCheck(group));
@@ -254,8 +260,17 @@ fn draw_dir_row(
     let level = depth + 1;
     let hovered = matches!(
         app.pointer.hover,
-        Hover::Commit(CommitTarget::Dir(r) | CommitTarget::DirCheck(r)) if r == i
+        Hover::Commit(
+            CommitTarget::Dir(r) | CommitTarget::DirCheck(r) | CommitTarget::DirStage(r, _)
+        ) if r == i
     );
+    // 暂存区视图中悬停时行尾是暂存或取消暂存的按钮，位置和组标题的按钮相同；名字放不下而显示
+    // 全名时，按钮跟在全名之后（见 `commit_overflow`）。
+    let target = dir_action_target(app, group, i);
+    let actions = target.and_then(|_| match full {
+        Some(overflow) => overflow.actions,
+        None => hovered.then(|| file_actions(band)),
+    });
     // 多选时下面的文件都选中了：画成选中状态。
     let members = rows.dir(group, dir);
     // 选中的文件比目录下面的少时不可能都选中，不必逐个查。
@@ -267,7 +282,10 @@ fn draw_dir_row(
             .all(|&m| app.commit_is_selected(&status.entries[m].path));
     let icon_x = r.check_x(app, level) + ICON;
     let text_x = icon_x + icons::FOLDER_WIDTH + LABEL_GAP;
-    let room = (!wanted).then(|| (text_clip.right() - text_x).max(0.0));
+    let text_end = actions.map_or(text_clip.right(), |(_, stage)| {
+        (stage.x - 4.0).min(text_clip.right())
+    });
+    let room = (!wanted).then(|| (text_end - text_x).max(0.0));
     let parts = dir_parts(app, frame, name, room);
     let width = parts_width(app, frame, &parts, true);
     let key = CommitName::Dir(group, dir.to_path_buf());
@@ -276,7 +294,12 @@ fn draw_dir_row(
         .commit
         .names
         .sync(&key, cause, &parts, shown_width(width, room));
-    let retracting = !wanted && view.progress < 1.0 && text_x + view.width > text_clip.right();
+    let lag = match actions {
+        Some((open, _)) if wanted => actions_lag(app, i, band, open, width - view.width),
+        _ => 0.0,
+    };
+    let button = actions.map(|(_, stage)| Rect::new(stage.x - lag, stage.y, stage.w, stage.h));
+    let retracting = !wanted && view.progress < 1.0 && text_x + view.width > text_end;
     let color = if retracting {
         retracting_color(p, is_selected, focused, view.progress)
     } else {
@@ -304,13 +327,14 @@ fn draw_dir_row(
     // 两种行排得整齐。
     icons::folder(frame, (icon_x, (cy - 6.0).round()), open, p.folder, list);
     // 写全名、收回途中名字画到过渡中的宽度为止，侧栏外的部分由 `draw_commit_overflow`
-    // 接着画。
-    let name_clip = if wanted || retracting {
-        let w = (text_x + view.width - list.x).max(0.0);
-        Rect::new(list.x, y, w, COMMIT_ROW).intersect(list)
+    // 继续画。
+    let name_end = if wanted || retracting {
+        text_x + view.width
     } else {
-        text_clip
+        text_end
     };
+    let name_end = button.map_or(name_end, |b| name_end.min(b.x - 4.0));
+    let name_clip = Rect::new(list.x, y, (name_end - list.x).max(0.0), COMMIT_ROW).intersect(list);
     draw_name(
         app,
         frame,
@@ -318,6 +342,19 @@ fn draw_dir_row(
         (&parts, &view),
         name_clip,
     );
+    if let (Some(rect), Some(target)) = (button, target) {
+        let on = app.pointer.hover == Hover::Commit(target);
+        draw_button(frame, p, rect, list, on, false);
+        let ink = if on { p.text } else { p.text_muted };
+        draw_action_icon(frame, target, center(rect), ink, list);
+        // 伸出侧栏的按钮同样可以点击，命中区域不裁到列表内。
+        let hit = if full.is_some() {
+            rect
+        } else {
+            rect.intersect(list)
+        };
+        hits.push((hit, target));
+    }
     if let Some(spill) = spill {
         // 显示全名的这一行覆盖列表右边的滚动条（见 `draw_commit_overflow`）：行底色右边到
         // 侧栏边缘的区域同样属于这一行，鼠标移入时全名保持显示。
@@ -352,7 +389,6 @@ fn draw_file_row(
         wanted,
         cause,
         focused,
-        browse,
         ..
     } = *r;
     let cy = y + COMMIT_ROW / 2.0;
@@ -368,12 +404,13 @@ fn draw_file_row(
                 | CommitTarget::StageFile(i, _)
         ) if i == index
     );
-    let targets = file_action_targets(app, r.cx.rows.group_of(i), index);
+    let group = r.cx.rows.group_of(i);
+    let targets = file_action_targets(app, group, index);
     // 悬停时右端的状态字母替换为「打开文件」「回滚」两个按钮；文件名放不下而显示全名时，
     // 按钮跟在全名之后（见 `commit_overflow`）。
     let actions = match full {
         Some(overflow) => overflow.actions,
-        None => (hovered && !browse).then(|| file_actions(band)),
+        None => hovered.then(|| file_actions(band)),
     };
     // 文件没有箭头：勾选框和同一层目录的勾选框对齐；平铺时没有层级，和组标题的勾选框
     // 对齐。
@@ -392,7 +429,11 @@ fn draw_file_row(
         .map(|p| p.to_string_lossy());
     // 名字用正文色（删除的文件用次要色），状态是右端一个上色的字母（M、U、D 等）；
     // 整行名字上色后颜色过多，不易分辨。
-    let change = entry.shown();
+    let change = match (r.staging, group) {
+        (true, Some(CommitGroup::Staged)) => entry.staged.unwrap_or_else(|| entry.shown()),
+        (true, Some(CommitGroup::Changes)) => entry.unstaged.unwrap_or_else(|| entry.shown()),
+        _ => entry.shown(),
+    };
     let letter = change.letter().to_string();
     let letter_w = frame.measure(FontKind::Ui, app.fonts.ui_small, &letter);
     let letter_x = band.right() - END_CENTER - letter_w / 2.0;
@@ -479,9 +520,13 @@ fn draw_file_row(
     let content = parts_width(app, frame, &parts, false);
     let reach = NAME_FADE * stage(view.progress, FADE_FROM, 1.0);
     if !wanted && text_x + content > name_end + 0.5 && reach > 0.0 {
-        let solid = shade_color.map_or(p.sidebar_bg, |c| {
-            crate::view::workspace::panel::over(p.sidebar_bg, c)
-        });
+        let mut solid = p.sidebar_bg;
+        if app.commit_shows_others() {
+            solid = crate::view::workspace::panel::over(solid, others::current_fill(app));
+        }
+        if let Some(color) = shade_color {
+            solid = crate::view::workspace::panel::over(solid, color);
+        }
         let edge = Rect::new(name_end - reach, y, reach, COMMIT_ROW);
         frame.within(name_clip, |frame| fade(frame, edge, solid, false));
     }

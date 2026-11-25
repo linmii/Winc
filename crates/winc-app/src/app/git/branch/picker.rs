@@ -1,12 +1,10 @@
 //! 分支选择器：从提交视图的分支行就地展开，或者从状态栏的分支名往上展开，两处是同一个面板。
 //!
-//! 搜索框下面是一排拉取、推送、获取（按住 ⌥ 时拉取换成拉取并变基）：分支和同步都在这里，
-//! 状态栏不再另有一套分支菜单。
-//! 依次是最近使用、本地分支和可以展开的远程分支，分支名按 `/` 分层，只展开当前分支所在的目录。
-//! 同一个分支只列一次：本地分支一屏放得下时不单列最近使用，单列时下面不再重复；已有本地分支的
-//! 远程分支只在搜索时列出。
-//! 输入框既能搜索也能新建：搜索时目录全部展开，没有同名分支时最后一行是「新建分支」。回车切换
-//! 到选中的分支，有未提交的更改时用提示框询问带过去还是储藏；右键或行尾的「⋯」打开分支的操作菜单。
+//! 搜索框下面是一排拉取、推送、获取（按住 ⌥ 时拉取换成拉取并变基），其下依次是最近使用、本地分支和
+//! 可以展开的远程分支，分支名按 `/` 分层，只展开当前分支所在的目录。同一个分支只列一次：本地分支一
+//! 屏放得下时不单列最近使用；已有本地分支的远程分支只在搜索时列出。输入框既能搜索也能新建：搜索时目
+//! 录全部展开，没有同名分支时最后一行是「新建分支」。回车切换到选中的分支，有未提交的更改时用提示框
+//! 询问带过去还是储藏；右键或行尾的「⋯」打开分支的操作菜单。
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -26,7 +24,7 @@ const RECENT_BRANCHES: usize = 5;
 /// [`rate`] 给字符分散命中的最低得分：低于它的是连续命中。
 const SCATTERED: u32 = 1000;
 
-/// 分支、位置选择器从哪儿展开。
+/// 分支、位置选择器从哪里展开。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GitAnchor {
     /// 提交视图的分支行下方。
@@ -276,7 +274,7 @@ pub fn branch_rows(list: &BranchList<'_>) -> Vec<BranchRow> {
         current,
         toggled: list.toggled,
     };
-    // 各组都列全：「最近」只是捷径，其中的分支在「本地」里照样有；「远程」不因为已有本地分支
+    // 各组都列全：「最近」只是捷径，其中的分支在「本地」里仍然有；「远程」不因为已有本地分支
     // 而少列，否则看起来像远程上没有这个分支。
     let local = items(false);
     if !local.is_empty() {
@@ -648,7 +646,7 @@ impl App {
         self.layout.picker = Rect::new(x, y, w, h);
     }
 
-    /// 点了选择面板里的 `part`。
+    /// 点击选择面板里的 `part`。
     pub(in crate::app) fn press_picker_part(&mut self, part: PickerPart) {
         match part {
             PickerPart::More(row) => self.press_picker_more(row),
@@ -676,7 +674,7 @@ impl App {
         self.request_redraw();
     }
 
-    /// 点了第 `row` 行行尾的「⋯」。
+    /// 点击第 `row` 行行尾的「⋯」。
     fn press_picker_more(&mut self, row: usize) {
         self.overlays.picker.selected = row;
         let branch =
@@ -738,12 +736,25 @@ impl App {
         self.picker_lists_branches() && !self.picker_filters_log()
     }
 
-    /// 拉取、推送、获取（`part`）对应的 Git 操作：按住 ⌥ 时拉取是拉取并变基。
+    /// 拉取、推送、获取（`part`）对应的 Git 操作：按住 ⌥ 时拉取换成另一种方式（平时合并时是
+    /// 拉取并变基，平时变基时是拉取并合并）。
     pub(crate) fn picker_action_command(&self, part: PickerPart) -> MenuCommand {
         match part {
-            PickerPart::Pull if self.pointer.modifiers.alt_key() => MenuCommand::GitPullRebase,
+            PickerPart::Pull if self.pointer.modifiers.alt_key() => {
+                self.picker_action_command_with_alt(part)
+            }
             PickerPart::Pull => MenuCommand::GitPull,
             PickerPart::Push => MenuCommand::GitPush,
+            _ => MenuCommand::GitFetch,
+        }
+    }
+
+    /// 按住 ⌥ 时 `part` 对应的 Git 操作：拉取是与平时相反的方式，其余不变。
+    pub(crate) fn picker_action_command_with_alt(&self, part: PickerPart) -> MenuCommand {
+        match (part, self.pulls_with_rebase()) {
+            (PickerPart::Pull, true) => MenuCommand::GitPullMerge,
+            (PickerPart::Pull, false) => MenuCommand::GitPullRebase,
+            (PickerPart::Push, _) => MenuCommand::GitPush,
             _ => MenuCommand::GitFetch,
         }
     }
@@ -754,13 +765,17 @@ impl App {
         if self.git.branch.running.is_some() || self.git.remotes.is_empty() {
             return false;
         }
-        let on_branch = (self.git.status.as_ref())
-            .is_some_and(|s| matches!(s.head, Some(winc_editor::git::Head::Branch(_))));
         match part {
             PickerPart::Pull => self.has_upstream(),
-            PickerPart::Push => on_branch,
+            PickerPart::Push => self.on_branch(),
             _ => true,
         }
+    }
+
+    /// `HEAD` 是否在一个分支上（不是游离的 `HEAD`）。
+    pub(crate) fn on_branch(&self) -> bool {
+        (self.git.status.as_ref())
+            .is_some_and(|s| matches!(s.head, Some(winc_editor::git::Head::Branch(_))))
     }
 
     /// 操作一段里的 `part` 现在能不能用：新建分支、新建工作树始终可用，其余见
@@ -773,7 +788,7 @@ impl App {
     }
 
     /// 命令「Git：切换分支…」：提交视图开着时从分支行展开分支选择器，否则从状态栏的分支名；状态栏
-    /// 也收着时先打开提交视图。
+    /// 也保存时先打开提交视图。
     pub(in crate::app) fn switch_branch_from_command(&mut self) {
         if self.commit_shown() {
             return self.open_branch_picker(GitAnchor::Branch);
@@ -938,7 +953,7 @@ impl App {
         let row = (self.overlays.picker.branch_rows.as_ref())
             .and_then(|rows| rows.get(self.overlays.picker.selected))
             .cloned();
-        // 日志的分支筛选：选分支、标签只看它的提交，「全部分支」看全部；组、目录照常展开、收起。
+        // 日志的分支筛选：选分支、标签只看它的提交，「全部分支」看全部；组、目录仍然展开、收起。
         if self.picker_filters_log() {
             let chosen = match &row {
                 Some(BranchRow::All) => Some(None),

@@ -5,8 +5,10 @@ use winc_editor::PreviewMode;
 
 use super::*;
 
+mod blank_lines;
 mod epub;
 mod images;
+mod latex;
 mod live;
 mod markdown;
 mod navigation;
@@ -933,13 +935,14 @@ fn each_kind_of_file_keeps_its_own_preview_mode() {
     assert_eq!(mode(&app), PreviewMode::Preview);
 
     // 新窗口按状态恢复各类的方式。
-    app.editor.preview_defaults = [PreviewMode::Source; 3];
+    app.editor.preview_defaults = [PreviewMode::Source; winc_editor::PreviewKind::ALL.len()];
     app.apply_preview_state();
     assert_eq!(
         app.editor.preview_defaults,
         [
             PreviewMode::Source,
             PreviewMode::Preview,
+            PreviewMode::Source,
             PreviewMode::Source
         ]
     );
@@ -1154,7 +1157,7 @@ fn footnote_jumps_keep_context_above_and_mark_the_target() {
         (back - third).clamp(0.0, max)
     );
 
-    // 标题照旧滚动到顶部。
+    // 标题仍然滚动到顶部。
     app.jump_to_anchor("标题");
     assert_eq!(app.preview.markdown.scroll(), 0.0);
     let _ = std::fs::remove_dir_all(&dir);

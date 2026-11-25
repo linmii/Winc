@@ -5,14 +5,12 @@ use crate::app::PickerPart;
 use crate::keymap::Action;
 
 impl App {
-    /// 提交视图标题行「⋯」的菜单，自上而下：进行中的操作的继续、跳过和中止；拉取、推送、获取；
-    /// 储藏更改、远程仓库（见 [`branch_menu`]），提交、更改、分支、标签、工作树、仓库几个子菜单
-    /// （更改一项的内容随视图不同）；以树形显示（排成
-    /// 树时打勾）、显示暂存区、显示全部仓库（有多个仓库时才有）、全部展开、全部折叠（已经是那样
-    /// 的灰显）；显示 Git 日志、显示 Git 输出。
+    /// 提交视图标题行「⋯」的菜单，自上而下：进行中的操作的继续、跳过和中止；拉取、推送、获取；储藏
+    /// 更改、远程仓库（见 [`branch_menu`]），提交、更改、分支、标签、工作树、仓库几个子菜单（更改一
+    /// 项的内容随视图不同）；以树形显示（排成树时打勾）、显示暂存区、显示全部仓库（有多个仓库时
+    /// 才有）、全部展开、全部折叠（已经是那样的灰显）；显示 Git 日志、显示 Git 输出。
     ///
-    /// 三个子菜单里是命令面板中已有的命令，快捷键相同。刷新是标题行上的按钮，回滚勾选的文件在
-    /// 组标题上，这里不重复。
+    /// 子菜单里是命令面板中已有的命令，快捷键相同；刷新和回滚勾选的文件不在这里。
     pub(in crate::app) fn commit_more_menu(
         &self,
     ) -> Vec<crate::app::input::context_menu::MenuEntry> {
@@ -30,12 +28,16 @@ impl App {
         };
         let all_collapsed = shown().all(|group| self.git.commit.group_collapsed(group));
         let all_expanded = shown().all(|group| !self.git.commit.group_collapsed(group))
-            && self.git.commit.collapsed_dirs.iter().all(HashSet::is_empty);
+            && self.git.commit.collapsed_dirs.iter().all(HashSet::is_empty)
+            && self.git.commit.other_collapsed_dirs.is_empty();
         let busy = self.git.branch.running.is_some();
+        // 拉取自…、推送到…在远程仓库子菜单里，在分支上、有远程时可用。
+        let transfer = self.picker_action_enabled(PickerPart::Push);
         let mut entries = branch_menu(
             &self.git.remote_list,
             self.git.status.as_ref().and_then(|s| s.operation),
             busy,
+            transfer,
         );
         // 与远程交换提交的三项排在最前（进行中的操作之后）：不用先展开分支选择面板。
         let sync = [
@@ -51,7 +53,15 @@ impl App {
             MenuCommand::GitPush => self.picker_action_enabled(PickerPart::Push),
             _ => self.picker_action_enabled(PickerPart::Fetch),
         };
-        let quick = sync.map(|command| MenuEntry::Item(command, enabled(command)));
+        let mut quick: Vec<MenuEntry> = (sync.into_iter())
+            .map(|command| MenuEntry::Item(command, enabled(command)))
+            .collect();
+        // 按住 ⌥ 时拉取换成另一种方式，与分支选择器相同。
+        let other = self.picker_action_command_with_alt(PickerPart::Pull);
+        quick.insert(
+            1,
+            MenuEntry::Alternate(other, enabled(MenuCommand::GitPull)),
+        );
         entries.splice(at..at, quick.into_iter().chain([MenuEntry::Separator]));
         // 分支、工作树、仓库各一个子菜单，里面是命令面板中已有的命令。
         let item = |action: Action| MenuEntry::Item(MenuCommand::GitAction(action), true);
@@ -158,11 +168,13 @@ impl App {
         let clean = status.is_some_and(|s| s.entries.is_empty());
         let mut entries = Vec::new();
         let enabled = idle && (!clean || self.git.commit.amend);
+        // 并入历史提交时提交以后要变基，不再推送、同步。
+        let pushes = enabled && self.git.commit.into.is_none();
         if push {
-            entries.push(MenuEntry::Item(MenuCommand::CommitPush, enabled));
+            entries.push(MenuEntry::Item(MenuCommand::CommitPush, pushes));
         }
         entries.extend([
-            MenuEntry::Item(MenuCommand::CommitSync, enabled),
+            MenuEntry::Item(MenuCommand::CommitSync, pushes),
             MenuEntry::Separator,
         ]);
         entries.extend([
@@ -183,7 +195,7 @@ impl App {
         let Some(root) = self.git.root.clone() else {
             return;
         };
-        self.update_state(|state| {
+        self.update_state(move |state| {
             let repos = &mut state.sign_off_repos;
             match repos.iter().position(|repo| *repo == root) {
                 Some(at) => drop(repos.remove(at)),
@@ -221,14 +233,11 @@ impl App {
 
     /// 提交，成功以后推送（`sync` 时同步）。
     pub(super) fn git_commit_then(&mut self, sync: bool) {
-        self.git.commit.push_after = true;
-        self.git.commit.sync_after = sync;
-        self.git_commit();
-        // 没有真的开始提交（没写信息、没勾文件），就不留着「之后推送」。
-        if !self.git.commit.busy {
-            self.git.commit.push_after = false;
-            self.git.commit.sync_after = false;
-        }
+        // 并入历史提交时提交以后要变基，不推送。
+        let push = self.git.commit.into.is_none();
+        self.git.commit.push_after = push;
+        self.git.commit.sync_after = sync && push;
+        self.git_commit_resumed();
     }
 
     /// 在按目录排成树和平铺之间切换更改列表。
@@ -237,10 +246,14 @@ impl App {
     pub(in crate::app) fn toggle_commit_layout(&mut self) {
         let flat = !self.git.commit.flat();
         self.git.commit.set_flat(flat);
-        self.update_state(|state| state.commit_tree = !flat);
+        // 展开、收起动画保存着旧模式的行，切换后立即按新模式绘制。
+        self.git.commit.motion = None;
+        self.git.commit.fold_motion = None;
+        self.git.commit.shift = None;
+        self.git.commit.overflow = None;
+        self.update_state(move |state| state.commit_tree = !flat);
         self.git.commit.scroll = self.git.commit.scroll.min(self.commit_max_scroll());
         self.reveal_commit_selection();
-        self.sync_log_diff_layout();
         self.request_redraw();
     }
 
@@ -278,7 +291,7 @@ impl App {
                 let tracked = entries.filter(|e| !e.untracked() && !e.conflicted());
                 let paths: Vec<PathBuf> = tracked.map(|e| e.path.clone()).collect();
                 if !paths.is_empty() {
-                    self.confirm_rollback(paths);
+                    self.confirm_commit_rollback(paths);
                 }
             }
             MenuCommand::LogNewTag => {
@@ -289,7 +302,7 @@ impl App {
             }
             MenuCommand::CommitSortBy(sort) => {
                 self.git.commit.set_sort(sort);
-                self.update_state(|state| state.commit_sort = sort.key().to_owned());
+                self.update_state(move |state| state.commit_sort = sort.key().to_owned());
                 self.reveal_commit_selection();
             }
             MenuCommand::GitShowOutput => self.show_git_output(),
@@ -327,7 +340,7 @@ impl App {
                     }
                     self.focus = Focus::Editor;
                 }
-                MenuCommand::GitRollbackFile => self.confirm_rollback(paths),
+                MenuCommand::GitRollbackFile => self.confirm_commit_rollback(paths),
                 MenuCommand::GitStashFiles => self.ask_stash_files(paths),
                 MenuCommand::CommitCheck(on) => self.set_commit_checked(&paths, on),
                 MenuCommand::CopyPath => self.copy_paths(&paths, false),
@@ -344,7 +357,7 @@ impl App {
                     self.focus = Focus::Editor;
                 }
             }
-            MenuCommand::GitRollbackFile => self.confirm_rollback(vec![path]),
+            MenuCommand::GitRollbackFile => self.confirm_commit_rollback(vec![path]),
             MenuCommand::GitStashFiles => self.ask_stash_files(vec![path]),
             MenuCommand::CommitCheck(on) => self.set_commit_checked(&[path], on),
             MenuCommand::GitIgnore(kind) => self.git_ignore(&path, kind),

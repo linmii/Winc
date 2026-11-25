@@ -7,7 +7,7 @@
 mod badges;
 mod branches;
 mod details;
-mod files;
+pub(in crate::view) mod files;
 mod graph;
 
 use badges::*;
@@ -28,7 +28,7 @@ use winc_render::Stroke;
 
 use crate::app::Focus;
 use crate::app::git::log::{
-    AUTHOR_DEFAULT, LOG_FILTER_GAP, LOG_LIST_PAD, LogColumn, LogParts, LogPill, LogTarget, TextRun,
+    AUTHOR_PAD, LOG_FILTER_GAP, LOG_LIST_PAD, LogColumn, LogParts, LogPill, LogTarget, TextRun,
     details_top, display_time, is_relative_time, list_time, log_author_width, short, since_label,
 };
 use crate::app::{StatusEntry, StatusRow};
@@ -55,8 +55,8 @@ const CORNER_STEPS: usize = 6;
 const GRAPH_FADED: f32 = 0.55;
 /// 提交图最多绘制的车道数（条）：超出的车道压缩在最右侧，避免提交说明的可用宽度被占满。
 const MAX_LANES: usize = 10;
-/// 时间一列的宽度（逻辑像素）。
-const DATE_W: f32 = 104.0;
+/// 时间一列中时间左边的留白（逻辑像素），与作者一列隔开。
+const DATE_PAD: f32 = 12.0;
 /// 单个引用徽章的最大宽度（逻辑像素）；更长的名字从末尾截短，详情中显示全名。
 const BADGE_MAX: f32 = 140.0;
 /// 截短后徽章的最小宽度（逻辑像素）；更窄时无法辨认引用名，改为计入「+N」。
@@ -116,11 +116,27 @@ pub(in crate::view) fn draw_log(app: &mut App, frame: &mut Frame<'_>, index: usi
     let search = draw_search(app, frame, &parts);
     hits.push((search, LogTarget::Search));
     let pills = match app.editor.documents[index].log.as_deref() {
-        Some(view) => log_pills(app, frame, &view.query),
+        Some(view) => {
+            // 放不下时各下拉只写名字（见 `draw_header`）。
+            let room = header_limit(&parts) - (search.right() + LOG_FILTER_GAP);
+            let chip = file_chip(app, frame, &view.query).map_or(0.0, |(_, w)| w + 4.0);
+            let full = log_pills(app, frame, &view.query, false);
+            let need = full.iter().map(|e| e.width + 4.0).sum::<f32>() + chip;
+            if need > room {
+                log_pills(app, frame, &view.query, true)
+            } else {
+                full
+            }
+        }
         None => Vec::new(),
     };
     let animate = app.animate_status();
     let pills = app.git.log.pills.sync(&LogPill::ALL, pills, animate);
+    fit_log_author(app, frame, index);
+    fit_log_date(app, frame);
+    let names = app.animate_log_names();
+    app.git.log.details_names.begin_frame(names);
+    app.git.log.branch_names.begin_frame(names);
     {
         let app = &*app;
         let Some(view) = app.editor.documents[index].log.as_deref() else {
@@ -128,8 +144,9 @@ pub(in crate::view) fn draw_log(app: &mut App, frame: &mut Frame<'_>, index: usi
         };
         draw_header(app, frame, view, &parts, (search, &pills), &mut hits);
         draw_branches_button(app, frame, &parts, &mut hits);
-        branches_max = draw_branches(app, frame, view, &parts, (&mut hits, &mut long_branches));
         draw_list(app, frame, view, &parts, scroll, &mut hits, &mut clipped);
+        // 分支面板放不下的名字可以伸到提交列表上面，后画。
+        branches_max = draw_branches(app, frame, view, &parts, (&mut hits, &mut long_branches));
         // 切换到另一个提交时内容淡入（`App::note_log_details_shown`）。
         draw_details_footer(app, frame, view, &parts);
         let opacity = app.git.log.fade.map_or(1.0, |c| 0.4 + 0.6 * c.progress());
@@ -143,6 +160,8 @@ pub(in crate::view) fn draw_log(app: &mut App, frame: &mut Frame<'_>, index: usi
             )
         });
     }
+    app.git.log.details_names.end_frame();
+    app.git.log.branch_names.end_frame();
     // 详情一栏的最大滚动位置：内容下方留 16 逻辑像素，使底部的提示行（高 30 逻辑像素）不遮挡
     // 最后一行内容。
     let details = parts.details;
@@ -243,13 +262,15 @@ fn draw_header(
     let mut x = search.right() + LOG_FILTER_GAP;
     let pill_h = search.h;
     let y = search.y;
+    // 刷新和「⋯」总在右端；左边的各项画到它们之前为止，放不下的不画。
+    let limit = header_limit(parts);
 
     // 各个下拉框，宽度和文字随筛选条件过渡（`log_pills`）。
     for row in pills {
         let (target, name, on) = pill_info(row.key, query);
         let rect = Rect::new(x, y, row.width, pill_h);
         x = rect.right() + 4.0 * row.share;
-        if rect.w < 1.0 {
+        if rect.w < 1.0 || rect.right() > limit {
             continue;
         }
         let shown = row.share >= 1.0;
@@ -306,23 +327,12 @@ fn draw_header(
     }
 
     // 文件历史：显示所查看的文件。
-    if let Some(path) = &query.path {
-        let shown = app
-            .git
-            .root
-            .as_deref()
-            .and_then(|r| path.strip_prefix(r).ok())
-            .unwrap_or(path)
-            .to_string_lossy()
-            .into_owned();
-        let text = t!("git-log-filter-file", path = shown);
-        let w = frame
-            .measure(FontKind::Ui, app.fonts.ui_small, &text)
-            .min(320.0)
-            + 20.0;
+    if let Some((text, w)) = file_chip(app, frame, query) {
         let rect = Rect::new(x + 4.0, y, w, pill_h);
-        frame.rounded(rect, p.hover, RADIUS_ROW);
-        ui_text_small(frame, app, rect.x + 10.0, rect, &text, p.text_muted, rect);
+        if rect.right() <= limit {
+            frame.rounded(rect, p.hover, RADIUS_ROW);
+            ui_text_small(frame, app, rect.x + 10.0, rect, &text, p.text_muted, rect);
+        }
         x = rect.right() + 4.0;
     }
 
@@ -361,8 +371,13 @@ fn draw_header(
         t!("git-log-commit-count", count = count, more = more)
     };
     let note_w = frame.measure(FontKind::Ui, app.fonts.ui_small, &note);
-    let note_x = options.x - 10.0 - note_w;
-    ui_text_small(frame, app, note_x, header, &note, p.text_dim, header);
+    let mut note_x = options.x - 10.0 - note_w;
+    // 提交数与左边的各项挤在一起时不画。
+    if x + 8.0 <= note_x {
+        ui_text_small(frame, app, note_x, header, &note, p.text_dim, header);
+    } else {
+        note_x = limit + 8.0;
+    }
 
     // 已筛选时在左侧绘制「清除筛选」，仅在与右端提交数之间的空间足够时绘制。
     if query.filtered() {
@@ -381,6 +396,44 @@ fn draw_header(
     }
 }
 
+/// 标题栏左边各项最远画到的位置：「⋯」按钮左边留 8 逻辑像素（按钮的位置见 `draw_header`）。
+fn header_limit(parts: &LogParts) -> f32 {
+    parts.header.right() - 10.0 - 24.0 - 4.0 - 24.0 - 8.0
+}
+
+/// 文件历史标题栏中显示所查看文件的标签：文字和宽度；不是文件历史时为 `None`。
+fn file_chip(app: &App, frame: &mut Frame<'_>, query: &LogQuery) -> Option<(String, f32)> {
+    let path = query.path.as_ref()?;
+    let root = app.git.root.as_deref();
+    let shown = root.and_then(|r| path.strip_prefix(r).ok()).unwrap_or(path);
+    let text = t!("git-log-filter-file", path = shown.to_string_lossy());
+    let w = frame
+        .measure(FontKind::Ui, app.fonts.ui_small, &text)
+        .min(320.0)
+        + 20.0;
+    Some((text, w))
+}
+
+/// 画列表右边缘与详情之间的分隔线，并记下它的命中范围。
+///
+/// 分隔线可以左右拖动，悬停或拖动时改为较粗的强调色线条。可拖动范围向详情一侧扩展 4 逻辑像素：
+/// 分隔线左侧紧邻列表的滚动条。
+fn draw_divider(app: &App, frame: &mut Frame<'_>, list: Rect, hits: &mut Vec<(Rect, LogTarget)>) {
+    let p = app.palette;
+    let divider = Rect::new(list.right() - 1.0, list.y, 5.0, list.h);
+    let active = app.log_dividing() || app.pointer.hover == Hover::Log(LogTarget::Divider);
+    if active {
+        frame.rect(Rect::new(list.right() - 1.5, list.y, 2.0, list.h), p.accent);
+    } else {
+        frame.rect(
+            Rect::new(list.right() - 1.0, list.y, 1.0, list.h),
+            p.separator,
+        );
+    }
+    // 命中范围放在命中表最前面，先于各行和详情判定。
+    hits.insert(0, (divider, LogTarget::Divider));
+}
+
 /// 筛选下拉 `pill` 的目标、名字，以及是否在按它筛选。
 fn pill_info(pill: LogPill, query: &LogQuery) -> (LogTarget, &'static str, bool) {
     let (name, on) = match pill {
@@ -393,8 +446,14 @@ fn pill_info(pill: LogPill, query: &LogQuery) -> (LogTarget, &'static str, bool)
 }
 
 /// 本帧标题栏的各个筛选下拉：值（例如「全部」「张伟」「最近 7 天」）和按文字量出的宽度，交给
-/// 过渡（`LogState::pills`）。文件历史只看那一个文件，没有「路径」。
-fn log_pills(app: &App, frame: &mut Frame<'_>, query: &LogQuery) -> Vec<StatusEntry<LogPill>> {
+/// 过渡（`LogState::pills`）。文件历史只看那一个文件，没有「路径」。`compact` 时只写名字，
+/// 是否在按它筛选由底色表示。
+fn log_pills(
+    app: &App,
+    frame: &mut Frame<'_>,
+    query: &LogQuery,
+    compact: bool,
+) -> Vec<StatusEntry<LogPill>> {
     let all = t!("git-log-filter-all");
     let size = app.fonts.ui_small;
     let value = |pill| match pill {
@@ -423,12 +482,13 @@ fn log_pills(app: &App, frame: &mut Frame<'_>, query: &LogQuery) -> Vec<StatusEn
     let pills = pills.filter(|p| *p != LogPill::Path || query.path.is_none());
     pills
         .map(|pill| {
-            let text = value(pill);
+            let text = if compact { String::new() } else { value(pill) };
             let (_, name, _) = pill_info(pill, query);
             let name_w = frame.measure(FontKind::Ui, size, name);
-            // 值最多占 160 逻辑像素，再长截短。
+            // 值最多占 160 逻辑像素，再长截短；只写名字时不留值的位置。
             let value_w = frame.measure(FontKind::Ui, size, &text).min(160.0);
-            let width = 10.0 + name_w + 6.0 + value_w + 20.0;
+            let gap = if compact { 0.0 } else { 6.0 };
+            let width = 10.0 + name_w + gap + value_w + 20.0;
             StatusEntry {
                 key: pill,
                 text,
@@ -560,7 +620,7 @@ fn draw_list(
     // 作者一列随列表宽度从仅头像连续展宽为头像加名字（见 `App::log_author_show`）。
     let show = app.log_author_show(list.w);
     // 右边几列从右往左排：提交号、时间、作者，隐藏的列不占宽度（见 `LogColumn`）。
-    let author_full = app.git.log.author_w.unwrap_or(AUTHOR_DEFAULT);
+    let author_full = app.log_author_full();
     let columns = Columns {
         author: app
             .log_column_shown(LogColumn::Author)
@@ -573,7 +633,8 @@ fn draw_list(
         false => 0.0,
     };
     let hash_x = list.right() - SCROLLBAR_HIT - hash_w;
-    let date_x = hash_x - if columns.date { DATE_W } else { 0.0 };
+    let date_w = app.git.log.date_fit.map_or(0.0, |(_, w)| w);
+    let date_x = hash_x - if columns.date { date_w } else { 0.0 };
     let author_w = columns.author.map_or(0.0, |w| log_author_width(w, show));
     let author_x = date_x - author_w;
     let subject_end = author_x - 12.0;
@@ -607,7 +668,11 @@ fn draw_list(
         draw_uncommitted(app, frame, (list, y, text_x), graph, uncommitted, hits);
     }
 
-    for i in rows {
+    let cuts = match graphless {
+        true => Vec::new(),
+        false => long_cuts(view, rows.clone(), line),
+    };
+    for i in rows.clone() {
         let commit = &view.commits[i];
         let y = list.y + top + (i as f64 - scroll) as f32 * lh;
         let row = Rect::new(list.x, y, list.w, lh);
@@ -624,11 +689,11 @@ fn draw_list(
         }
 
         if let Some(graph) = view.graph.get(i).filter(|_| !graphless) {
-            let cuts = long_cuts(view, i, line);
+            let cuts = cuts.get(i - rows.start).map_or(&[][..], Vec::as_slice);
             draw_graph_row(
                 app,
                 frame,
-                (graph, line, &cuts),
+                (graph, line, cuts),
                 (commit, i),
                 (graph_x, y, fill),
                 list,
@@ -679,7 +744,7 @@ fn draw_list(
                 app,
                 frame,
                 commit,
-                (author_x, date_x, hash_x, row, show),
+                (author_x, (date_x, date_w), hash_x, row, show),
                 columns,
                 now,
                 list,
@@ -690,20 +755,13 @@ fn draw_list(
         hits.push((band.intersect(list), LogTarget::Row(i)));
     }
 
-    // 列表和详情之间的分隔线可以左右拖动，悬停或拖动时改为较粗的强调色线条。可拖动范围向详情
-    // 一侧扩展 4 逻辑像素：分隔线左侧紧邻列表的滚动条。
-    let divider = Rect::new(list.right() - 1.0, list.y, 5.0, list.h);
-    let active = app.log_dividing() || app.pointer.hover == Hover::Log(LogTarget::Divider);
-    if active {
-        frame.rect(Rect::new(list.right() - 1.5, list.y, 2.0, list.h), p.accent);
+    // 详情在列表下方时，两者之间是一道横线，不能拖动。
+    if parts.stacked {
+        let line = Rect::new(list.x, list.bottom() - 1.0, list.w, 1.0);
+        frame.rect(line, p.separator);
     } else {
-        frame.rect(
-            Rect::new(list.right() - 1.0, list.y, 1.0, list.h),
-            p.separator,
-        );
+        draw_divider(app, frame, list, hits);
     }
-    // 命中范围放在命中表最前面，先于各行和详情判定。
-    hits.insert(0, (divider, LogTarget::Divider));
     // 作者一列的左边缘：左右拖动改宽度，悬停、拖动时画一道强调色的竖线。
     if columns.author.is_some() {
         let edge = Rect::new(author_x - 4.0, list.y, 8.0, list.h);
@@ -736,7 +794,7 @@ fn draw_author_and_time(
     app: &App,
     frame: &mut Frame<'_>,
     commit: &Commit,
-    (author_x, date_x, hash_x, row, show): (f32, f32, f32, Rect, f32),
+    (author_x, (date_x, date_w), hash_x, row, show): (f32, (f32, f32), f32, Rect, f32),
     columns: Columns,
     now: i64,
     list: Rect,
@@ -753,7 +811,7 @@ fn draw_author_and_time(
         hits.push((avatar, LogTarget::Avatar(i)));
         if show > 0.0 {
             // 按完全展开后的宽度截短，展开过程中由该列裁切，「…」的位置不随展开变化。
-            let room = author_w - 32.0;
+            let room = author_w - AUTHOR_PAD;
             let name = truncate_end(frame, &commit.author, app.fonts.ui_small, room);
             let ink = p.text_muted.alpha(p.text_muted.a * show);
             ui_text_small(frame, app, author_x + 22.0, row, &name, ink, clip);
@@ -776,16 +834,63 @@ fn draw_author_and_time(
     // 等宽字体、右对齐，使各行的时、分逐位对齐（见 `list_time`）。
     let time = list_time(commit, now);
     // 作者一列在时间左边让出 8：较长的写法（英文的「Yesterday」）可以伸进这一段。
-    let clip = Rect::new(date_x - 8.0, y, DATE_W + 8.0, lh).intersect(list);
+    let clip = Rect::new(date_x - 8.0, y, date_w + 8.0, lh).intersect(list);
     let w = frame.measure(FontKind::Mono, app.fonts.ui_small, &time);
     mono(
         app,
         frame,
-        (date_x + DATE_W - w, row),
+        (date_x + date_w - w, row),
         &time,
         p.text_dim,
         clip,
     );
+}
+
+/// 算出时间一列的宽度（逻辑像素）：列表中时间各种写法（今天、昨天、今年、往年）里最宽的一种，
+/// 加上左边的留白；字号和界面语言都没变时沿用上次的结果。
+fn fit_log_date(app: &mut App, frame: &mut Frame<'_>) {
+    let size = app.fonts.ui_small;
+    let key = (size.to_bits(), winc_i18n::locale());
+    if app.git.log.date_fit.is_some_and(|(k, _)| k == key) {
+        return;
+    }
+    let forms = [
+        t!("git-time-today", time = "00:00"),
+        t!("git-time-yesterday", time = "00:00"),
+        "00-00 00:00".to_owned(),
+        "0000-00-00".to_owned(),
+    ];
+    let widest = (forms.iter())
+        .map(|form| frame.measure(FontKind::Mono, size, form))
+        .fold(0.0, f32::max);
+    app.git.log.date_fit = Some((key, (widest + DATE_PAD).ceil()));
+}
+
+/// 按第 `index` 个标签已读取的提交中最宽的作者名字算出作者一列的宽度（见
+/// [`crate::app::git::log::author_fit`]）；依据（[`crate::app::git::log::AuthorFitKey`]）没变时
+/// 沿用上次的结果。
+fn fit_log_author(app: &mut App, frame: &mut Frame<'_>, index: usize) {
+    let doc = &app.editor.documents[index];
+    let Some(view) = doc.log.as_deref() else {
+        return;
+    };
+    let size = app.fonts.ui_small;
+    let key = (
+        doc.id,
+        view.generation(),
+        view.stale,
+        view.commits.len(),
+        size.to_bits(),
+    );
+    if app.git.log.author_fit.is_some_and(|(k, _)| k == key) {
+        return;
+    }
+    let mut seen = std::collections::HashSet::new();
+    let widest = (view.commits.iter())
+        .filter(|c| seen.insert(c.author.as_str()))
+        .map(|c| frame.measure(FontKind::Ui, size, &c.author))
+        .fold(0.0, f32::max);
+    app.git.log.author_fit = Some((key, crate::app::git::log::author_fit(widest)));
 }
 
 /// 返回可点击的提交号的颜色：平时为强调色，悬停时为正文色。

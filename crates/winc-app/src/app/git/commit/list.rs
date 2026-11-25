@@ -2,6 +2,8 @@
 
 use super::*;
 use crate::app::ScrollTarget;
+use crate::app::git::DiffKind;
+use crate::layout::drawn_scroll;
 
 impl App {
     /// 提交视图列表现在的各行（见 [`CommitRows`]）。
@@ -44,32 +46,67 @@ impl App {
     }
 
     /// 只选中 `path`（清掉多选），在预览标签里打开它的差异；列表滚到让它露出来。
-    ///
-    /// 浏览历史提交的文件时（`commit.browse`），在该提交的差异标签中打开这个文件。
     pub(in crate::app::git) fn select_commit_file(&mut self, path: PathBuf) {
         self.git.commit.marked.clear();
         self.git.commit.anchor = Some(path.clone());
         self.git.commit.selected = Some(path.clone());
         self.reveal_commit_selection();
-        if self.git.commit.browse {
-            let index = (self.git.status.as_ref())
-                .and_then(|status| status.entries.iter().position(|e| e.path == path));
-            if let Some(index) = index {
-                self.open_log_diff_file(index);
-            }
-            return;
-        }
         self.git_preview_changes(&path);
     }
 
-    /// 浏览历史提交的文件时点击了第 `i` 个文件：选中它，并在差异标签中打开。
-    pub(super) fn browse_commit_file(&mut self, i: usize) {
-        let Some(path) = self.commit_entry(i).map(|e| e.path.clone()) else {
-            return;
+    /// 窗口纵坐标 `y` 处是改动列表的第几行（[`App::commit_rows`] 的下标）；不在列表内时为 `None`。
+    pub(super) fn commit_row_at(&self, y: f32) -> Option<usize> {
+        let list = self.commit_parts().list;
+        if y < list.y || y >= list.bottom() {
+            return None;
+        }
+        // 多仓库时改动列表排在其他仓库的各行和当前仓库的标题行下面。
+        let before = self.commit_rows_before() as f32 * COMMIT_ROW;
+        let offset = y - list.y + drawn_scroll(self.git.commit.scroll) - before;
+        let row = (offset >= 0.0).then(|| (offset / COMMIT_ROW) as usize)?;
+        (row < self.commit_rows().len()).then_some(row)
+    }
+
+    /// 预览文件 `path` 时比较哪两份内容。
+    ///
+    /// 暂存区视图中按选中的一行所在的组：「暂存的更改」比较上次提交与暂存区，「更改」比较暂存区
+    /// 与工作区。同一个文件有两行时按上次选中的行（`cursor`）认；那一行收起看不见时按文件的状态
+    /// 判断。勾选式和有冲突的文件比较上次提交与工作区。
+    pub(in crate::app::git) fn commit_diff_kind(&self, path: &Path) -> DiffKind {
+        let Some(status) = self
+            .git
+            .status
+            .as_ref()
+            .filter(|_| self.git.commit.staging())
+        else {
+            return DiffKind::Whole;
         };
-        self.focus = Focus::CommitList;
-        self.diff.land = None;
-        self.select_commit_file(path);
+        let Some(entry) = status.entries.iter().find(|e| e.path == path) else {
+            return DiffKind::Whole;
+        };
+        let rows = self.commit_rows();
+        let holds = |r: usize| {
+            matches!(rows.get(r), Some(CommitRow::File { index, .. })
+                if status.entries[*index].path == path)
+        };
+        let row = (self.git.commit.cursor.filter(|&r| holds(r)))
+            .or_else(|| (0..rows.len()).find(|&r| holds(r)));
+        let group = row.and_then(|r| {
+            rows[..r].iter().rev().find_map(|row| match row {
+                CommitRow::Group(group) => Some(*group),
+                _ => None,
+            })
+        });
+        let group = group.unwrap_or(match entry.unstaged {
+            None if entry.staged.is_some() => CommitGroup::Staged,
+            _ => CommitGroup::Changes,
+        });
+        match group {
+            _ if entry.conflicted() => DiffKind::Whole,
+            CommitGroup::Staged => DiffKind::Staged,
+            CommitGroup::Changes => DiffKind::Unstaged,
+            CommitGroup::Conflicts | CommitGroup::Untracked => DiffKind::Whole,
+        }
     }
 
     /// 列表里看得见的文件，按显示顺序。
@@ -290,8 +327,8 @@ impl App {
             before + i as f32 * COMMIT_ROW,
             before + (i + 1) as f32 * COMMIT_ROW,
         );
-        // 只在固定行盖住该行时才滚：滚到该行正好露在它所在的组、目录（层数对应的行数，不超过
-        // 能固定的层数）下面。已经露着的不动，单击列表不会跳、顶上固定的行也不会变。
+        // 只在固定行遮住该行时才滚：滚到该行正好露在它所在的组、目录（层数对应的行数，不超过
+        // 能固定的层数）下面。已经露出的不动，单击列表不会跳、顶上固定的行也不会变。
         let covered = self
             .commit_sticky(&rows)
             .iter()
@@ -446,10 +483,10 @@ impl App {
 
     /// 对更改列表中选中的文件执行 `action`（显示差异、打开源文件、回滚），返回是否已处理。
     ///
-    /// 焦点不在更改列表上、正在浏览历史提交的文件时不处理，按键继续交给其他绑定。
+    /// 焦点不在更改列表上时不处理，按键继续交给其他绑定。
     pub(in crate::app) fn run_changes_action(&mut self, action: crate::keymap::Action) -> bool {
         use crate::keymap::Action;
-        if self.focus != Focus::CommitList || self.log_diff_tree().is_some() {
+        if self.focus != Focus::CommitList {
             return false;
         }
         let Some(current) = self.git.commit.selected.clone() else {
@@ -479,7 +516,7 @@ impl App {
                     self.focus = Focus::Editor;
                 }
             }
-            _ => self.confirm_rollback(paths),
+            _ => self.confirm_commit_rollback(paths),
         }
         self.request_redraw();
         true
@@ -495,23 +532,7 @@ impl App {
     }
 
     /// [`App::on_key_commit_list`] 按下的是 `key` 时做的事。
-    ///
-    /// 浏览历史提交的文件时只处理移动和展开收起：勾选、回滚、打开工作区文件都不适用。
     pub(in crate::app) fn commit_list_key(&mut self, key: &Key) {
-        if self.git.commit.browse
-            && matches!(
-                key,
-                Key::Named(
-                    NamedKey::Space
-                        | NamedKey::Backspace
-                        | NamedKey::Delete
-                        | NamedKey::Enter
-                        | NamedKey::Tab
-                )
-            )
-        {
-            return;
-        }
         let rows = self.commit_rows();
         let Some(status) = self.git.status.as_ref() else {
             return;
@@ -588,7 +609,7 @@ impl App {
                 | NamedKey::PageDown,
             ) => {
                 if let Some(next) = target {
-                    if self.pointer.modifiers.shift_key() && !self.git.commit.browse {
+                    if self.pointer.modifiers.shift_key() {
                         self.select_commit_range(next);
                     } else {
                         self.select_commit_file(next);
@@ -620,7 +641,7 @@ impl App {
             Key::Named(NamedKey::Backspace | NamedKey::Delete) => {
                 let paths = self.commit_selection();
                 if !paths.is_empty() {
-                    self.confirm_rollback(paths);
+                    self.confirm_commit_rollback(paths);
                 }
             }
             Key::Named(NamedKey::Enter) => {
@@ -651,7 +672,7 @@ impl App {
 
 /// 按 `state` 的收起、平铺设置排出 `status` 的各行，按（`generation`，排列设置的版本）缓存在
 /// `state` 中；没有状态或仓库时返回空的列表。
-pub(in crate::app::git) fn rows_of(
+fn rows_of(
     state: &CommitState,
     status: Option<&Status>,
     root: Option<&Path>,

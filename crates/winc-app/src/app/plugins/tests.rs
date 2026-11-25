@@ -62,6 +62,16 @@ fn text(app: &App) -> String {
 #[test]
 fn plugin_command_transforms_and_undoes_the_document() {
     let (mut app, _dir, action) = test_app("甲\n乙\n甲\n");
+    // 上游将静态命令列表拆到单独模块，管理命令和动态脚本都必须继续注册。
+    for management in [
+        Action::ImportPluginFolder,
+        Action::ImportPluginPackage,
+        Action::ManagePlugins,
+        Action::ReloadPlugins,
+    ] {
+        assert!(palette().contains(&management));
+        assert_eq!(Action::from_id(&management.id()), Some(management));
+    }
     assert!(palette().contains(&action));
     assert!(app.run_action(action));
     assert_eq!(text(&app), "甲\n乙\n");

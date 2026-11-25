@@ -381,7 +381,7 @@ fn draw_compare(
         ]
     } else {
         [
-            ("→".into(), t!("git-log-hint-file-list")),
+            ("Tab".into(), t!("git-log-hint-file-list")),
             ("Esc".into(), t!("git-log-hint-exit-compare")),
             (
                 t!("git-log-hint-click").into(),
@@ -457,7 +457,7 @@ pub(super) fn draw_details_footer(
         ]
     } else {
         vec![
-            ("→".into(), t!("git-log-hint-file-list")),
+            ("Tab".into(), t!("git-log-hint-file-list")),
             (
                 t!("git-log-hint-double-click").into(),
                 t!("git-log-hint-open-diff"),
@@ -489,11 +489,11 @@ pub(super) fn draw_hints(
     items: &[(String, &str)],
     clip: Rect,
 ) {
-    /// 键帽的高度（逻辑像素，经验值）。
+    /// 键帽的高度（逻辑像素，取自调参）。
     const CAP_H: f32 = 18.0;
-    /// 键帽里文字左右的留白（逻辑像素，经验值）。
+    /// 键帽里文字左右的留白（逻辑像素，取自调参）。
     const CAP_PAD: f32 = 6.0;
-    /// 相邻两项之间的间隔（逻辑像素，经验值）。
+    /// 相邻两项之间的间隔（逻辑像素，取自调参）。
     const GAP: f32 = 14.0;
     let p = app.palette;
     let size = app.fonts.ui_small;

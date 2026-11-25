@@ -8,7 +8,9 @@
 pub(crate) mod blame;
 pub(crate) mod branch;
 pub(super) mod changes;
+pub(crate) mod combined;
 pub(super) mod commit;
+mod diffs;
 pub(super) mod fetch;
 pub(crate) mod form;
 pub(crate) mod location_picker;
@@ -16,7 +18,10 @@ pub(crate) mod log;
 pub(crate) mod merge;
 pub(crate) mod question;
 pub(crate) mod rebase;
+mod refresh;
 mod repository;
+pub(super) mod rewrite;
+mod stepping;
 pub(crate) mod worktree;
 
 use crate::app::scroll::set_scroll_line;
@@ -24,9 +29,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use ropey::Rope;
-use winc_editor::diff_view::{DiffSide, DiffView};
+use winc_editor::diff_view::{BlameSource, DiffSide, DiffView};
 use winc_editor::encoding::{decode_known, decode_unknown};
 use winc_editor::format::Cancel;
 use winc_editor::git::{self, Branch, Change, Git, Stash, Status, Unavailable, Worktree};
@@ -35,9 +41,17 @@ use winc_editor::{DocumentId, Encoding, LARGE_FILE, looks_binary};
 use winc_i18n::t;
 
 use super::diff::worktree_title;
+pub(crate) use diffs::DiffKind;
+// Git 的测试（只在 Unix 上编译）按 `crate::app::git::Target` 打开差异。
 use super::{App, Focus, UserEvent};
 use crate::app::NoticeKind;
 use crate::layout::SidebarView;
+#[cfg(all(test, unix))]
+pub(super) use diffs::Target;
+use diffs::{DiffTab, Prepared};
+
+/// Git 视图可见时补查本地状态的间隔；系统漏发通知时定期重新读取（取自调参）。
+const STATUS_RECHECK: Duration = Duration::from_secs(5);
 
 /// 界面线程与各后台任务共用的 [`Git`]。
 ///
@@ -111,6 +125,8 @@ struct Refs {
     /// 发布当前分支时使用的远程（[`winc_editor::git::Git::publish_target`]）；没有远程时为
     /// `None`。
     publish_remote: Option<String>,
+    /// 拉取当前分支时是否配置为变基（[`winc_editor::git::Git::pull_rebases`]）。
+    pull_rebase: bool,
     /// 仓库的公共 Git 目录；取不到时为 `None`。
     common_dir: Option<PathBuf>,
     /// 储藏，最新的在前。
@@ -126,53 +142,6 @@ struct Refs {
     version: Option<(u32, u32)>,
     /// 最近提交的作者和自己写的提交信息（见 [`Git::recent_history`]）；这次没有读时为 `None`。
     history: Option<winc_editor::git::RecentHistory>,
-}
-
-/// 差异的打开方式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Target {
-    /// 新建差异标签（或替换同名的差异标签）并切换到该标签。
-    Open,
-    /// 提交视图的预览标签，参数为请求序号。只采用最新的请求，快速切换选择时，
-    /// 先发出而后送达的结果被丢弃。
-    Preview(u64),
-    /// 原地更新已打开的差异标签，不切换标签，不改变滚动位置。
-    Refresh(DocumentId),
-}
-
-/// 后台准备好的差异。
-struct Prepared {
-    /// 进行比较的仓库；之后更换了目录时丢弃结果。
-    root: PathBuf,
-    /// 比较的文件。
-    path: PathBuf,
-    /// 比较时 `HEAD` 的提交号，左侧内容取自该提交。
-    oid: Option<String>,
-    target: Target,
-    /// 比较结果；无法比较时为原因（二进制、过大、无法读取）。
-    view: Result<DiffView, String>,
-}
-
-/// 发起比较时编辑器中该文件的快照。
-struct Snapshot {
-    /// 发起比较时的文本。
-    text: Rope,
-    /// 发起比较时的文档版本号，记进差异视图（`DiffView::source`）。
-    revision: u64,
-    /// 文档的编码，左侧内容按该编码解码。
-    encoding: Encoding,
-    /// 发起比较时文档是否有未保存的修改。
-    dirty: bool,
-    /// 文档的语言，左右两侧都按该语言着色。
-    language: &'static winc_syntax::Language,
-}
-
-/// 已打开的 Git 差异标签。
-struct DiffTab {
-    /// 比较的文件。
-    path: PathBuf,
-    /// 左侧内容对应的 `HEAD` 提交号；`HEAD` 变化时才重新读取左侧内容。
-    oid: Option<String>,
 }
 
 /// 读取分支和改动数的位置数上限（个）。
@@ -226,6 +195,8 @@ pub(crate) struct GitState {
     pub remote_list: Vec<winc_editor::git::Remote>,
     /// 发布当前分支时使用的远程，与状态一起刷新；没有远程时为 `None`。
     pub publish_remote: Option<String>,
+    /// 拉取当前分支时是否配置为变基，与状态一起刷新；「拉取自…」的「变基」默认按它勾选。
+    pub pull_rebase: bool,
     /// 储藏，最新的在前，与状态一起刷新。
     pub stashes: Vec<Stash>,
     /// 最近切换到过的分支名，最近的在前，与状态一起刷新。
@@ -248,6 +219,8 @@ pub(crate) struct GitState {
     ignored_paths: HashSet<PathBuf>,
     /// 正在运行的刷新；`None` 表示没有在运行。
     running: Option<Cancel>,
+    /// 下一次补查本地状态的时刻；Git 视图不可见时不安排。
+    recheck_due: Option<Instant>,
     /// 运行期间是否又收到刷新请求；为真时完成后再刷新一次。
     again: bool,
     /// 下一次刷新是否同时读取分支与储藏（由 [`App::git_refresh`] 设置，读取时清除）。
@@ -258,6 +231,8 @@ pub(crate) struct GitState {
     logs_outdated: bool,
     /// 已打开的 Git 差异标签；状态刷新后按需原地更新，标签关闭时移除。
     diff_tabs: HashMap<DocumentId, DiffTab>,
+    /// 「未提交的更改」标签；没有打开时为 `None`。
+    pub(crate) combined: Option<combined::CombinedTab>,
     /// 最近一次切换文件时的（差异标签，切换到的文件）。
     stepped: Option<(DocumentId, PathBuf)>,
     /// 最近一次预览请求的序号。
@@ -288,8 +263,8 @@ pub(crate) struct GitState {
     /// 后台读到的、等着确认的推送：要做的推送、会送出的提交的标题和总数（见
     /// [`App::ask_push`]）。
     pub push_preview: Arc<Mutex<Option<PushPreview>>>,
-    /// 推送对话框改了目标后在后台读到的提交（见 [`App::refresh_push_list`]）。
-    pub(super) push_outgoing: Arc<Mutex<Option<form::PushOutgoing>>>,
+    /// 推送或拉取对话框改了目标后在后台读到的提交（见 [`App::refresh_transfer_list`]）。
+    pub(super) transfer_commits: Arc<Mutex<Option<form::TransferCommits>>>,
     /// 已提示过 `git` 版本过低：每次运行只提示一次。
     pub(super) old_git_warned: bool,
     /// 定时获取的状态（见 [`fetch`]）。
@@ -336,6 +311,7 @@ impl Default for GitState {
             remotes: Vec::new(),
             remote_list: Vec::new(),
             publish_remote: None,
+            pull_rebase: false,
             stashes: Vec::new(),
             recent_branches: Vec::new(),
             worktrees: Vec::new(),
@@ -346,10 +322,12 @@ impl Default for GitState {
             decorations: HashMap::new(),
             ignored_paths: HashSet::new(),
             running: None,
+            recheck_due: None,
             again: false,
             refs_wanted: false,
             logs_outdated: false,
             diff_tabs: HashMap::new(),
+            combined: None,
             stepped: None,
             preview_seq: 0,
             asked_trust: Vec::new(),
@@ -365,7 +343,7 @@ impl Default for GitState {
             location_all: false,
             output_shown: 0,
             push_preview: Arc::default(),
-            push_outgoing: Arc::default(),
+            transfer_commits: Arc::default(),
             old_git_warned: false,
             version_read: HashSet::new(),
             authors: Vec::new(),
@@ -380,6 +358,13 @@ impl Default for GitState {
 }
 
 impl GitState {
+    /// 测试用：提供后台读到的仓库状态，不启动 Git 进程。
+    #[cfg(test)]
+    pub(in crate::app) fn summary_for_test(&self, root: PathBuf, status: Status) {
+        self.summaries.lock().unwrap().insert(root, status);
+        self.summaries_changed();
+    }
+
     /// 记下各仓库的状态（`summaries`）改过了。
     pub(crate) fn summaries_changed(&self) {
         (self.summaries_version).fetch_add(1, std::sync::atomic::Ordering::Release);
@@ -430,6 +415,7 @@ impl GitState {
             cancel.cancel();
         }
         self.again = false;
+        self.recheck_due = None;
         self.refs_wanted = false;
         self.root = None;
         self.tool.forget();
@@ -439,6 +425,7 @@ impl GitState {
         self.remotes.clear();
         self.remote_list.clear();
         self.publish_remote = None;
+        self.pull_rebase = false;
         self.stashes.clear();
         self.worktrees.clear();
         self.home = None;
@@ -452,89 +439,6 @@ impl GitState {
         self.decorations.clear();
         self.ignored_paths.clear();
     }
-}
-
-/// 在后台准备一个文件的差异：读取 `HEAD` 中的版本，与编辑器中的快照（未打开时读取磁盘）比较。
-fn prepare(
-    git: &Git,
-    root: &Path,
-    path: &Path,
-    snapshot: Option<Snapshot>,
-    oid: Option<&str>,
-) -> Result<DiffView, String> {
-    let name = winc_editor::display_name(path).into_owned();
-    if winc_backend::fs::is_dir(path) {
-        return Err(t!("git-diff-submodule", name = name));
-    }
-    let too_large = |len: usize| len as u64 > LARGE_FILE;
-    let head = git
-        .head_content(root, path, &Cancel::default())
-        .map_err(|e| t!("git-diff-head-unreadable", name = name.as_str(), error = e))?;
-    if head.as_ref().is_some_and(|h| too_large(h.len())) {
-        return Err(t!("git-diff-too-large", name = name));
-    }
-    if head.as_deref().is_some_and(looks_binary) {
-        return Err(t!("git-diff-binary", name = name));
-    }
-
-    // 右侧：文件已在编辑器中打开时使用编辑器中的内容（含未保存的修改），否则读取磁盘。左侧按
-    // 右侧的编码解码；右侧不存在（文件已删除）时左侧自行识别编码。
-    let revision = snapshot.as_ref().map(|s| s.revision);
-    let (new, encoding, title, language) = match snapshot {
-        Some(s) => (
-            Some(s.text.to_string()),
-            Some(s.encoding),
-            worktree_title(s.dirty),
-            s.language,
-        ),
-        None => {
-            let language = winc_syntax::detect(&name);
-            match winc_backend::fs::read(path) {
-                Ok(bytes) if too_large(bytes.len()) => {
-                    return Err(t!("git-diff-too-large", name = name));
-                }
-                Ok(bytes) if looks_binary(&bytes) => {
-                    return Err(t!("git-diff-binary", name = name));
-                }
-                Ok(bytes) => {
-                    let (text, encoding) = decode_unknown(&bytes);
-                    (Some(text), Some(encoding), worktree_title(false), language)
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    (None, None, t!("git-diff-side-worktree-deleted"), language)
-                }
-                Err(e) => {
-                    let error = e.to_string();
-                    return Err(t!("git-read-file-failed", name = name, error = error));
-                }
-            }
-        }
-    };
-    let old = head.map(|bytes| match encoding {
-        Some(encoding) => decode_known(&bytes, encoding),
-        None => decode_unknown(&bytes).0,
-    });
-    let old_title = match (&old, oid) {
-        (None, _) => t!("git-diff-side-head-missing").to_owned(),
-        (Some(_), Some(oid)) => format!("HEAD · {}", &oid[..oid.len().min(7)]),
-        (Some(_), None) => "HEAD".to_owned(),
-    };
-    // 文件已删除时右侧不可编辑。路径按编辑器的规则规范化，以便与已打开的标签匹配。
-    let editable = new.is_some().then(|| winc_editor::canonical_path(path));
-    let mut view = DiffView::new(
-        DiffSide::new(old_title, old.as_deref().unwrap_or(""), None, language)
-            .with_missing(old.is_none()),
-        DiffSide::new(title, new.as_deref().unwrap_or(""), editable, language)
-            .with_missing(new.is_none()),
-    );
-    view.source = revision;
-    view.repo_path = Some(path.to_path_buf());
-    Ok(view)
-}
-
-/// 返回差异标签的标题。
-pub(super) fn diff_title(path: &Path) -> String {
-    t!("git-diff-title", name = winc_editor::display_name(path))
 }
 
 impl App {
@@ -743,7 +647,7 @@ impl App {
             return;
         }
         // 未完成的提交信息按位置保存，切换回来时恢复。多仓库时列表里的各个仓库共用一条提交信息、
-        // 各文件的勾选也照样留着：在列表里点另一个仓库只换当前仓库，不换要提交的内容。
+        // 各文件的勾选也仍然留着：在列表里点另一个仓库只换当前仓库，不换要提交的内容。
         let carried = self
             .commit_shows_others()
             .then(|| self.git.commit.draft_text());
@@ -874,6 +778,7 @@ impl App {
             self.git.again = true;
             return;
         }
+        self.git.recheck_due = Some(Instant::now() + STATUS_RECHECK);
         // 尚未读取到状态时（刚打开、上次出错）同样没有分支列表，因此一并读取。
         let refs = std::mem::take(&mut self.git.refs_wanted) || self.git.status.is_none();
         let cancel = Cancel::default();
@@ -909,6 +814,7 @@ impl App {
                     let remotes = scope.spawn(|| git.remotes(root, cancel));
                     let remote_list = scope.spawn(|| git.remote_list(root, cancel));
                     let publish_remote = scope.spawn(|| git.publish_target(root));
+                    let pull_rebase = scope.spawn(|| git.pull_rebases(root) == Some(true));
                     let common_dir = scope.spawn(|| git.common_dir(root, cancel));
                     let stashes = scope.spawn(|| git.stashes(root, cancel));
                     let recent_branches = scope.spawn(|| git.recent_branches(root, cancel));
@@ -933,6 +839,7 @@ impl App {
                             .and_then(Result::ok)
                             .unwrap_or_default(),
                         publish_remote: publish_remote.join().ok().and_then(Result::ok),
+                        pull_rebase: pull_rebase.join().unwrap_or(false),
                         common_dir: common_dir.join().ok().and_then(Result::ok),
                         stashes: stashes.join().ok().and_then(Result::ok).unwrap_or_default(),
                         recent_branches: (recent_branches.join().ok())
@@ -998,7 +905,7 @@ impl App {
     pub(super) fn poll_git(&mut self) {
         self.git_take_scan();
         self.take_push_preview();
-        self.take_push_outgoing();
+        self.take_transfer_commits();
         self.take_auto_fetch();
         // 其他仓库的状态由后台直接写入，读完时同样到达这里：列着其他仓库时重新绘制。
         if self.commit_shows_others() && self.commit_shown() {
@@ -1056,6 +963,7 @@ impl App {
                         self.git.remotes = refs.remotes;
                         self.git.remote_list = refs.remote_list;
                         self.git.publish_remote = refs.publish_remote;
+                        self.git.pull_rebase = refs.pull_rebase;
                         self.git.home = refs.home;
                         self.warn_old_git(refs.version);
                         if let Some(history) = refs.history {
@@ -1122,6 +1030,7 @@ impl App {
             }
             if refreshed {
                 self.refresh_git_diffs();
+                self.refresh_combined();
                 self.sync_index_texts();
                 self.prefill_merge_message();
             }
@@ -1192,7 +1101,8 @@ impl App {
         if !trusted {
             return;
         }
-        self.update_state(|state| state.trust_repo(root, fingerprint));
+        let trusted = root.to_path_buf();
+        self.update_state(move |state| state.trust_repo(&trusted, fingerprint));
         if let Some(git) = self.git.tool.get() {
             git.trust(root, fingerprint);
         }
@@ -1224,112 +1134,6 @@ impl App {
         }
     }
 
-    /// 打开当前文件的改动（命令「Git：显示当前文件的改动」）。
-    pub(super) fn git_show_changes(&mut self) {
-        let Some(path) = self.editor.active().and_then(|d| d.path.clone()) else {
-            self.flash(t!("git-no-file-in-tab"));
-            return;
-        };
-        self.fetch_changes(&path, Target::Open);
-    }
-
-    /// 在提交视图的预览标签中打开 `path` 的改动；依次查看多个文件时只占用一个标签。
-    pub(super) fn git_preview_changes(&mut self, path: &Path) {
-        self.git.preview_seq += 1;
-        self.fetch_changes(path, Target::Preview(self.git.preview_seq));
-    }
-
-    /// 标签 `id` 是否为工作区文件的 Git 差异。
-    pub(super) fn steps_changed_files(&self, id: DocumentId) -> bool {
-        self.git.diff_tabs.contains_key(&id)
-    }
-
-    /// 返回提交视图列出的下一个（`forward`）或上一个文件：（路径，序号（从 0 起），文件总数）。
-    ///
-    /// 当前标签不是工作区文件的差异，或没有更多文件时返回 `None`。从最近一次切换到的文件起算：
-    /// 该文件无法打开时（二进制、没有差异）标签保留原内容，再次切换即可跳过该文件。
-    pub(super) fn next_changed_file(&self, forward: bool) -> Option<(PathBuf, usize, usize)> {
-        let id = self.editor.active()?.id;
-        let tab = self.git.diff_tabs.get(&id)?;
-        let current = match &self.git.stepped {
-            Some((doc, path)) if *doc == id => path,
-            _ => &tab.path,
-        };
-        // 列表中已折叠目录内的文件不在 `commit_files` 中，此时按状态中的顺序。
-        let mut files = self.commit_files();
-        if !files.contains(current) {
-            let entries = &self.git.status.as_ref()?.entries;
-            files = entries.iter().map(|e| e.path.clone()).collect();
-        }
-        let at = files.iter().position(|p| p == current)?;
-        let next = if forward { at + 1 } else { at.checked_sub(1)? };
-        let path = files.get(next)?.clone();
-        Some((path, next, files.len()))
-    }
-
-    /// 在工作区文件的差异标签中打开提交视图列出的下一个（`forward`）或上一个文件，返回是否已打开。
-    ///
-    /// 新文件在当前标签中打开，连续查看时只占用一个标签。
-    pub(super) fn step_changed_file(&mut self, forward: bool) -> bool {
-        let Some(id) = self.editor.active().map(|d| d.id) else {
-            return false;
-        };
-        let Some((path, next, total)) = self.next_changed_file(forward) else {
-            return false;
-        };
-        let name = winc_editor::display_name(&path).into_owned();
-        self.git.commit.preview = Some(id);
-        self.git.stepped = Some((id, path.clone()));
-        self.select_commit_file(path);
-        let (index, name) = (next + 1, name.as_str());
-        self.flash(if forward {
-            t!("git-next-file", name = name, index = index, total = total)
-        } else {
-            t!(
-                "git-previous-file",
-                name = name,
-                index = index,
-                total = total
-            )
-        });
-        true
-    }
-
-    /// 状态刷新后重新比较已过时的 Git 差异标签，并原地更新内容。
-    ///
-    /// `HEAD` 变化（提交、切换分支）时重新读取左侧。右侧为磁盘内容（文件未在编辑器中打开）时，
-    /// 文件可能已变化，同样重新比较；其余标签的右侧由 [`App::sync_diff_source`] 随编辑器中的
-    /// 文档更新，无需再运行 `git`。
-    fn refresh_git_diffs(&mut self) {
-        let editor = &self.editor;
-        self.git
-            .diff_tabs
-            .retain(|id, _| editor.document(*id).is_some_and(|d| d.diff.is_some()));
-        let oid = self.git.status.as_ref().and_then(|s| s.oid.as_deref());
-        let follows_editor = |id: DocumentId| {
-            editor
-                .document(id)
-                .and_then(|d| d.diff.as_deref())
-                .and_then(|v| v.new.path.as_deref())
-                .is_some_and(|path| {
-                    editor
-                        .documents
-                        .iter()
-                        .any(|d| d.path.as_deref() == Some(path))
-                })
-        };
-        let stale: Vec<(DocumentId, PathBuf)> = self
-            .git
-            .diff_tabs
-            .iter()
-            .filter(|(id, tab)| tab.oid.as_deref() != oid || !follows_editor(**id))
-            .map(|(id, tab)| (*id, tab.path.clone()))
-            .collect();
-        for (id, path) in stale {
-            self.fetch_changes(&path, Target::Refresh(id));
-        }
-    }
-
     /// 在标签 `id`（文件 `path`）关闭后释放其逐行追溯、改动标记、差异标签记录和日志的 `git log`。
     ///
     /// 没有其他标签打开同一文件时，同时释放该文件在 `HEAD` 中的内容（基准）。
@@ -1338,6 +1142,9 @@ impl App {
         self.git.log.forget(id);
         self.git.changes.forget_document(id);
         self.git.diff_tabs.remove(&id);
+        if self.git.combined.as_ref().is_some_and(|t| t.doc == id) {
+            self.git.combined = None;
+        }
         if let Some(path) = path
             && !self
                 .editor
@@ -1348,151 +1155,4 @@ impl App {
             self.git.changes.forget_base(path);
         }
     }
-
-    /// 在后台读取 `path` 的 Git 改动，完成后按 `target` 交给界面线程。
-    pub(super) fn fetch_changes(&mut self, path: &Path, target: Target) {
-        let Some(root) = self.git.root.clone() else {
-            self.flash(t!("git-not-a-repository"));
-            return;
-        };
-        // 路径可能经过符号链接（macOS 的 `/var` 指向 `/private/var`），不在仓库下时规范化后再比较。
-        let path = if path.starts_with(&root) {
-            path.to_path_buf()
-        } else {
-            match winc_config::files::canonicalize(path) {
-                Ok(real) if real.starts_with(&root) => real,
-                _ => {
-                    self.flash(t!("git-file-outside-repository"));
-                    return;
-                }
-            }
-        };
-
-        // 文件已在编辑器中打开时使用其快照；大文件不比较，整体读入字符串会超出内存预算。
-        let canonical = winc_editor::canonical_path(&path);
-        let doc = self
-            .editor
-            .documents
-            .iter()
-            .find(|d| d.path.as_deref() == Some(canonical.as_path()) && d.holds_file_text());
-        if doc.is_some_and(|d| d.is_large()) {
-            if !matches!(target, Target::Refresh(_)) {
-                let name = winc_editor::display_name(&path).into_owned();
-                self.flash(t!("git-diff-too-large", name = name));
-            }
-            return;
-        }
-        let snapshot = doc.and_then(|d| {
-            Some(Snapshot {
-                text: d.text().rope()?.clone(),
-                revision: d.revision,
-                encoding: d.encoding,
-                dirty: d.is_dirty(),
-                language: d.highlighter.language(),
-            })
-        });
-
-        let oid = self.git.status.as_ref().and_then(|s| s.oid.clone());
-        let sender = self.git.prepared.0.clone();
-        self.spawn_git(UserEvent::GitContent, move |tool| {
-            let view = match &tool {
-                Ok(git) => prepare(git, &root, &path, snapshot, oid.as_deref()),
-                Err(e) => Err(unusable(e)),
-            };
-            let _ = sender.send(Prepared {
-                root,
-                path,
-                oid,
-                target,
-                view,
-            });
-        });
-    }
-
-    /// 接收后台准备好的差异，按 [`Target`] 新建标签、替换预览标签的内容或原地更新已打开的标签。
-    ///
-    /// 仓库已更换、预览请求不是最新的一次或原地更新失败时丢弃结果。
-    pub(super) fn poll_git_content(&mut self) {
-        while let Ok(prepared) = self.git.prepared.1.try_recv() {
-            // 等待结果期间更换了目录：文件属于旧仓库，不在新目录或开始页中打开标签。
-            if self.git.root.as_deref() != Some(prepared.root.as_path()) {
-                continue;
-            }
-            // 预览只采用最新的一次请求。
-            if let Target::Preview(seq) = prepared.target
-                && seq != self.git.preview_seq
-            {
-                continue;
-            }
-            let tab = DiffTab {
-                path: prepared.path,
-                oid: prepared.oid,
-            };
-            let view = match prepared.view {
-                Ok(view) => view,
-                // 原地更新失败（文件变为二进制、无法读取）时不提示，标签保留上一次的内容。
-                Err(_) if matches!(prepared.target, Target::Refresh(_)) => continue,
-                Err(e) => {
-                    self.diff.land = None;
-                    self.flash(e);
-                    continue;
-                }
-            };
-            let name = winc_editor::display_name(&tab.path).into_owned();
-            let title = diff_title(&tab.path);
-            let index = match prepared.target {
-                Target::Refresh(id) => {
-                    // 替换内容，保留滚动位置。
-                    if let Some(index) = self.editor.replace_diff(id, &title, view) {
-                        self.git.diff_tabs.insert(id, tab);
-                        if self.editor.active == Some(index) {
-                            self.clamp_scroll();
-                        }
-                    }
-                    self.request_redraw();
-                    continue;
-                }
-                _ if view.is_identical() => {
-                    self.diff.land = None;
-                    // 逐行比较不计换行符的写法，没有改动时两侧的内容仍可能只差换行符。这类差别
-                    // 是否算作修改由 `git` 按 `core.autocrlf` 和文件属性判定，提示只说明差别所在。
-                    let text = if view.old.text == view.new.text {
-                        t!("git-diff-identical", name = name.as_str())
-                    } else {
-                        t!("git-diff-line-endings-only", name = name.as_str())
-                    };
-                    self.flash(text);
-                    continue;
-                }
-                Target::Preview(_) => {
-                    let index = self
-                        .editor
-                        .show_diff_in(self.git.commit.preview, &title, view);
-                    self.git.commit.preview = Some(self.editor.documents[index].id);
-                    index
-                }
-                Target::Open => self.editor.show_diff(&title, view),
-            };
-            let id = self.editor.documents[index].id;
-            self.git.diff_tabs.insert(id, tab);
-            // 打开时定位到第一处改动。
-            let doc = &mut self.editor.documents[index];
-            if let Some(row) = doc.diff.as_deref().and_then(|v| {
-                v.hunk_rows[winc_editor::diff_view::RIGHT]
-                    .first()
-                    .map(|r| r.start)
-            }) {
-                set_scroll_line(doc, row.saturating_sub(3) as f64);
-            }
-            self.relayout();
-            self.clamp_scroll();
-            self.land_diff_file();
-            self.sync_index_texts();
-            self.request_redraw();
-        }
-    }
 }
-
-// 仅在 Unix 上编译测试：相关测试以 sh 脚本作为格式化工具，Git 的测试也只在该平台上运行。
-#[cfg(all(test, unix))]
-mod tests;

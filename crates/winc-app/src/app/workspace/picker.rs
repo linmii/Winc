@@ -136,6 +136,11 @@ impl App {
         self.overlays.picker.vim_list = None;
         self.overlays.picker.remote = None;
         self.overlays.picker.open = true;
+        // 上一次没能列出远端的文件：打开面板时重试。
+        let index = &mut self.overlays.picker.index;
+        if index.failed() && index.is_ready() {
+            index.refresh();
+        }
         self.overlays.picker.doc = self.editor.active().map(|d| d.id);
         self.overlays.picker.input.set_text("");
         self.overlays.picker.selected = 0;
@@ -380,7 +385,20 @@ impl App {
             return;
         }
 
-        self.overlays.picker.hits = self.overlays.picker.index.search(query);
+        // 最近打开过、文件表中没有的文件（被忽略或已删除）要看磁盘上是否还在，只看这几个；打开的
+        // 标签仍然列出。远端的路径按 `may_be_file` 的规则，不阻塞界面。
+        let index = &self.overlays.picker.index;
+        let visited: Vec<&Path> = (self.history.files.iter())
+            .map(PathBuf::as_path)
+            .filter(|path| match index.indexed(path) {
+                Some(true) => true,
+                Some(false) => self.may_be_file(path),
+                None => false,
+            })
+            .collect();
+        let tabs = (self.editor.documents.iter()).filter_map(|doc| doc.path.as_deref());
+        let opened = visited.into_iter().chain(tabs);
+        self.overlays.picker.hits = self.overlays.picker.index.search_with_opened(query, opened);
 
         // 没有输入时，最近打开的文件排在最前面；第一条是上一个文件，因此 `⌘P` 加回车即可切回。
         if query.trim().is_empty() {
@@ -408,7 +426,7 @@ impl App {
     /// 重新遍历目录时旧表仍然存在，继续列出旧表中的结果（面板高度也按这些结果计算），
     /// 避免只显示一行文字而下方留出大片空白。
     pub(crate) fn picker_indexing(&self) -> bool {
-        !self.overlays.picker.index.is_ready() && self.overlays.picker.index.is_empty()
+        !self.overlays.picker.index.is_ready() && self.overlays.picker.index.quick_open_len() == 0
     }
 
     /// 打开目录之后，在后台建立 `⌘P` 面板的文件表，使第一次按 `⌘P` 时即可列出文件。
@@ -459,7 +477,10 @@ impl App {
             .get(self.overlays.picker.selected)
             .and_then(|&i| self.overlays.picker.index.absolute(i));
 
-        if !self.overlays.picker.index.poll() {
+        let changed = self.overlays.picker.index.poll();
+        let missing = self.overlays.picker.index.take_missing();
+        self.forget_recent(&missing);
+        if !changed {
             return;
         }
 
@@ -611,6 +632,14 @@ impl App {
         }
 
         self.request_redraw();
+    }
+
+    /// 从最近打开的文件中去掉已不存在的 `gone`（文件，或目录连同其下的文件）：快速打开不再
+    /// 列出它们。远端的文件在界面线程上查不到是否还在，由文件表的更新确认。
+    pub(in crate::app) fn forget_recent(&mut self, gone: &[PathBuf]) {
+        if !gone.is_empty() {
+            (self.history.files).retain(|path| !gone.iter().any(|gone| path.starts_with(gone)));
+        }
     }
 
     /// 通知文件表：`paths` 中的路径在本程序内被新建、删除、改名或另存为。

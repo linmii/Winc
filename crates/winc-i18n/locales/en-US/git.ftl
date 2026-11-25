@@ -53,6 +53,7 @@ git-stash-more = { $count ->
     [one] 1 more stash…
    *[other] { $count } more stashes…
 }
+git-stash-too-many = Too many files are selected to stash at once on Windows. Select whole folders, or stash in several parts.
 git-stash-no-files = This stash has no changes to show
 git-stash-apply = Apply
 git-stash-pop = Pop
@@ -87,6 +88,7 @@ git-op-delete-branch = deleting branch “{ $name }”
 git-op-new-branch = creating branch “{ $name }”
 git-op-new-tag = creating tag “{ $name }”
 git-op-pull-rebase = pulling with rebase
+git-op-pull-merge = pulling with merge
 git-op-rename-branch = renaming branch “{ $name }”
 git-op-init = initializing the repository
 git-op-clone = cloning “{ $name }”
@@ -98,6 +100,7 @@ git-op-tag-delete = deleting tag “{ $name }”
 git-op-tag-delete-remote = deleting tag “{ $name }” from the remote
 git-no-remote = No remote is configured
 git-branch-rename = Rename Branch…
+git-tag-new-branch = New Branch from This Tag…
 git-tag-push = Push to Remote
 git-tag-delete = Delete Tag
 git-tag-delete-remote = Delete from Remote
@@ -345,6 +348,10 @@ git-commit-reformatted = { $count ->
     [one] Reformatted 1 file before committing
    *[other] Reformatted { $count } files before committing
 }
+git-commit-reformat-failed = { $count ->
+    [one] Couldn’t reformat 1 file; committed it as is
+   *[other] Couldn’t reformat { $count } files; committed them as is
+}
 git-undo-commit-confirm = Undo the last commit?
 git-undo-commit-confirm-detail = The changes in “{ $subject }” stay staged, and its message returns to the commit box.
 git-undo-commit-confirm-button = Undo Commit
@@ -372,6 +379,7 @@ git-push-confirm-sync = Sync with { $upstream }?
 git-push-confirm-sync-detail = Pulls { $behind } and pushes { $ahead } commits with { $target }.
 git-push-confirm-sync-button = Sync
 git-push-form-title = Push { $branch }
+git-push-form-title-upto = Push { $branch } up to { $commit }
 git-push-form-remote = Remote
 git-push-form-branch = Branch
 git-push-form-commits = Commits
@@ -380,6 +388,12 @@ git-push-form-tags-hint = All local tags
 git-push-form-pushing = Pushing…
 git-push-form-nothing = No new commits
 git-push-form-branch-invalid = Invalid branch name
+git-pull-form-title = Pull into { $branch }
+git-pull-form-button = Pull
+git-pull-form-rebase = Rebase
+git-pull-form-rebase-hint = Put local commits after the pulled ones
+git-pull-form-pulling = Pulling…
+git-pull-form-branch-missing = This remote branch isn’t here yet; fetch first
 git-commit-push-confirm = Commit and push?
 git-commit-push-confirm-scope = { $count ->
     [one] 1 file will be committed to “{ $branch }” and pushed to upstream.
@@ -399,6 +413,7 @@ git-undo-commit-done-in = Undid commit { $oid } in “{ $name }”
 git-undo-commit-failed = Couldn’t undo the commit: { $error }
 git-commit-partial-not-utf8 = “{ $name }” isn’t UTF-8 text, so its changes can’t be partially committed
 git-rollback-nothing-checked = Select the files to roll back first
+git-rollback-nothing-unstaged = No unstaged changes to roll back
 git-stage-partial-not-utf8 = “{ $name }” isn’t UTF-8 text, so its changes can’t be partially staged
 git-stage-failed = Couldn’t update the staging area: { $error }
 git-stage-nothing = The current file has no unstaged changes
@@ -414,6 +429,8 @@ git-rollback-confirm-one = Roll back changes to “{ $name }”?
 git-rollback-confirm-many = Roll back changes to { $count } files?
 git-rollback-confirm-detail = Tracked files are restored to the last commit, and untracked files are moved to the { common-trash }.
 git-rollback-confirm-detail-remote = Tracked files are restored to the last commit, and untracked files are deleted and can’t be restored.
+git-rollback-confirm-detail-index = Unstaged changes in tracked files are discarded and staged changes are kept; untracked files are moved to the { common-trash }.
+git-rollback-confirm-detail-index-remote = Unstaged changes in tracked files are discarded and staged changes are kept; untracked files are deleted and can’t be restored.
 git-rollback-confirm-button = Roll Back
 git-rollback-file-failed = Couldn’t roll back “{ $name }”: { $error }
 git-rollback-done = { $count ->
@@ -434,16 +451,22 @@ git-unusable = Can’t use Git: { $error }
 git-no-repository-detail = Initialize one to review changes, commit and sync here
 git-no-repository-clone = Clone Repository…
 git-not-a-repository = The current folder isn’t a Git repository
+git-not-on-branch = You’re not on a branch. Check out a branch first
 git-no-file-in-tab = The current tab has no file
 git-diff-title = { $name } · Diff
+git-diff-title-changes = { $name } · Changes
+git-diff-title-staged = { $name } · Staged Changes
 git-diff-submodule = “{ $name }” is a submodule; no diff is shown
 git-diff-head-unreadable = Couldn’t read the last committed version of “{ $name }”: { $error }
+git-diff-index-unreadable = Couldn’t read the staged version of “{ $name }”: { $error }
 git-diff-too-large = “{ $name }” is too large; no diff is shown
 git-diff-binary = “{ $name }” is a binary file; no diff is shown
 git-diff-identical = “{ $name }” is the same as in the last commit; no changes
 git-diff-line-endings-only = “{ $name }” differs from the last commit only in line endings
 git-diff-side-worktree-deleted = Working Tree · Deleted
 git-diff-side-head-missing = HEAD · File Doesn’t Exist
+git-diff-side-index = Staging Area
+git-diff-side-index-missing = Staging Area · File Doesn’t Exist
 
 ## Trusting repository configuration
 
@@ -541,12 +564,16 @@ git-commit-button-files = { $count ->
 git-commit-button-all = Commit All
 git-commit-push-button = Commit and Push…
 git-commit-amend = Amend Last Commit
+git-commit-into-fixup = Fixup into { $commit }
+git-commit-into-squash = Squash into { $commit }
+git-commit-into-pushed = Needs force push
 git-commit-undo = Undo
 git-commit-next-push = Push
 git-commit-next-pull = Pull
 git-commit-next-both = Sync
 git-commit-next-publish = Publish Branch
 git-commit-button-amend = Amend Commit
+git-commit-button-rebase = Commit and Rebase
 git-commit-button-committing = Committing…
 git-commit-button-committed = Committed { $oid }
 git-commit-button-continue-rebase = Continue Rebase
@@ -645,6 +672,11 @@ git-history-title = { $name } · History
 git-lines-history-title = { $name }:{ $start }–{ $end } · History
 git-log-target-not-loaded = The target commit hasn’t loaded yet. Scroll down the list and try again
 git-log-parent-not-loaded = The parent commit hasn’t loaded yet. Scroll down the list and try again
+git-log-no-parent = This is the first commit, so it has no parent
+git-log-no-child = No child commit in the list
+git-log-diff-back = Back to Log
+git-log-diff-hide-files = Hide Files
+git-log-diff-show-files = Show Files
 git-next-file = Switched to the next file: { $name } ({ $index }/{ $total })
 git-previous-file = Switched to the previous file: { $name } ({ $index }/{ $total })
 git-press-again-next-file = This is the last change. Repeat to switch to the next file: { $name }
@@ -754,6 +786,9 @@ git-commit-group-changes = Changes
 git-commit-group-staged = Staged Changes
 git-commit-group-conflicts = Conflicts
 git-commit-group-untracked = Untracked Files
+git-commit-revert-group = Roll Back All Unstaged Changes
+git-commit-stage-group = Stage All Changes
+git-commit-unstage-group = Unstage All Changes
 git-commit-open-deleted = The file was deleted and can’t be opened
 git-commit-blocker-conflicts = { $count ->
     [one] { $count } file still has unresolved conflicts
@@ -768,12 +803,16 @@ git-log-file-binary = Binary
 ## Blame
 
 git-blame-not-in-repository = The current file isn’t in a Git repository, so blame isn’t available
+git-blame-diff-unavailable = This diff isn’t between Git versions, so blame isn’t available
 git-blame-failed = Couldn’t load blame: { $error }
 git-blame-uncommitted = Uncommitted changes
 git-blame-line-uncommitted = This line hasn’t been committed
 git-rebase-not-on-branch = This commit isn’t on the current branch
-git-rebase-has-merges = The range contains merge commits, so it can’t be rebased interactively
+git-rebase-has-merges = There are merge commits after this commit, so its history can’t be rewritten
+git-rebase-moved = The current branch changed in the meantime; try again
 git-op-rebase = rebasing interactively
+git-op-fixup = fixing up { $commit }
+git-op-squash-into = squashing into { $commit }
 git-op-rebase-load = reading commits
 git-rebase-title = Interactive Rebase
 git-rebase-pick = Pick
@@ -792,6 +831,21 @@ git-rebase-pushed-warning = { $count ->
    *[other] { $count } of these commits are already pushed; you’ll need to force push afterward
 }
 git-rebase-message-placeholder = Set a commit to Reword to edit its message here
+git-reword-title = Edit Commit Message
+git-reword-commit = Commit
+git-reword-message = Message
+git-reword-button = Save
+git-reword-pushed-warning = This commit is already pushed; you’ll need to force push after saving
+git-op-reword = editing the commit message
+git-op-drop-commit = dropping commit { $commit }
+git-drop-commit-confirm = Drop “{ $subject }”?
+git-drop-commit-confirm-detail = Its changes will be removed from the current branch.
+git-drop-commit-confirm-later = { $count ->
+    [one] 1 later commit will be reapplied.
+   *[other] { $count } later commits will be reapplied.
+}
+git-drop-commit-confirm-pushed = This commit is already pushed; you’ll need to force push afterward.
+git-drop-commit-confirm-button = Drop Commit
 git-merge-three-pane = Three-Way
 git-merge-panes-not-utf8 = Can’t show a three-way merge for “{ $name }”: the file isn’t UTF-8
 git-merge-close-three-pane = Exit Three-Way
@@ -799,3 +853,15 @@ git-merge-side-result = Result
 git-rebase-hint = ↑↓ select · { $alt }↑↓ move · P R E S F D set action
 git-merge-conflict-title = Conflict { $index } of { $count }
 git-merge-edit-conflict = Edit Manually
+git-combined-title = Uncommitted Changes
+git-combined-no-text-change = No text changes
+git-combined-comparing = Comparing…
+git-combined-empty = No uncommitted changes
+git-combined-files = { $count ->
+    [one] { $count } file
+   *[other] { $count } files
+}
+git-combined-open-file = Open File
+git-combined-open-diff = Open in Diff Tab
+git-combined-previous = Previous Change
+git-combined-next = Next Change

@@ -2,20 +2,20 @@
 //!
 //! 视图自上而下是标题行、分支行、说明条（合并、变基暂停时才有）、改动列表、储藏（有储藏时）、
 //! 上一次提交（未推送时可撤销），最下面是提交卡片（提交信息 2 至 8 行，「修改上次提交」和「提交
-//! ⌄」）；列表分「冲突」「更改」「未跟踪的文件」三组。提交只含勾选的文件（`git commit --only`），
-//! 冲突未解决时拒绝提交；选中文件时在预览标签里打开差异。绘制在 `view/git/commit.rs`，点击区域见
-//! `commit_hits`。
+//! ⌄」）。勾选式（默认）分「冲突」「更改」「未跟踪的文件」三组，提交勾选的文件；暂存区视图分
+//! 「冲突」「暂存的更改」「更改」三组，提交暂存区的内容。冲突未解决时拒绝提交；选中文件时在预览
+//! 标签中打开差异。
+//! 绘制在 `view/git/commit.rs`，点击区域见 `commit_hits`。
 
 mod actions;
 mod compose;
 mod ignore;
 mod reformat;
 pub(in crate::app) use actions::COMMITTED_SHOWN;
-pub(crate) use actions::{PUSH_PREVIEW, PushIntent, SyncState};
+pub(crate) use actions::{PUSH_PREVIEW, PushIntent, RollbackTo, SyncState};
 pub(crate) use compose::{AUTHOR_COMMITS, OWN_MESSAGES};
 pub use ignore::IgnoreKind;
 mod list;
-pub(in crate::app::git) use list::rows_of;
 mod stash;
 use stash::STASH_GAP;
 pub(crate) use stash::{StashLine, StashView};
@@ -23,6 +23,7 @@ mod drawer;
 pub(crate) use drawer::{DRAWER_CLOSED, DRAWER_TOP, Drawer};
 mod worktrees;
 pub(crate) use worktrees::WorktreeLine;
+mod into;
 mod last;
 mod menu;
 mod others;
@@ -38,6 +39,7 @@ use picks::Skip;
 use staging::StageJob;
 use state::*;
 pub(crate) use state::{CommitScope, stages_by_hunk};
+pub(in crate::app::git) use state::{NaturalName, only_subdir};
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -99,7 +101,7 @@ const UNDO_H: f32 = 28.0;
 const CONTEXT_ROW: f32 = 24.0;
 /// 说明条右端「中止」按钮的宽度（逻辑像素）。
 ///
-/// 40 是经验值：「中止」两个字加左右各 8 像素的留白。
+/// 40 为「中止」两个字加左右各 8 像素的留白。
 const BANNER_ABORT_W: f32 = 40.0;
 /// 拆分按钮右边下拉箭头那一段的宽度（逻辑像素），与 `TOGGLE_W` 同宽：两个字符宽的图标。
 const BUTTON_MENU_W: f32 = 26.0;
@@ -111,22 +113,22 @@ type CardButtons = (Rect, Rect, Option<Rect>);
 /// 「上一次提交」那一栏里「撤销」文字两侧的留白（逻辑像素），与悬停底色的圆角相当。
 const UNDO_PAD: f32 = 6.0;
 /// 提交卡片、说明条左右的边距（逻辑像素），和标题行的项目名、右端按钮对齐；卡片离视图底边
-/// 也是这么多。
+/// 也取该值。
 const MARGIN: f32 = 8.0;
 /// 提交信息中一行的高度（逻辑像素），取多行输入框统一的行高。
 pub(crate) const MESSAGE_LINE: f32 = 20.0;
 /// 提交信息框内文字行与上下边框之间的留白（逻辑像素），与行数无关。
 ///
-/// 2 是经验值：单行时框高 24，与搜索框同高。左右留白另加行高中字形上下的空白，使文字
+/// 取 2：单行时框高 24，与搜索框同高。左右留白另加行高中字形上下的空白，使文字
 /// 与边框的可见间距四边相等。
 pub(crate) const MESSAGE_PAD: f32 = 2.0;
 /// 提交信息框最多显示的行数（行），再多就在框内滚动。
 ///
-/// 8 是经验值：再多的说明就在框内滚动，不再挤占下面列表的高度。
+/// 取 8：不再挤占下面列表的高度。
 const MESSAGE_MAX_LINES: usize = 8;
 /// 窗口很矮时，列表至少留下的高度（逻辑像素）。
 ///
-/// 72 是经验值：三行列表各 24，仍能看出列表里有几项。
+/// 72 为三行列表（每行 24）的高度，仍能看出列表里有几项。
 const LIST_MIN: f32 = 72.0;
 
 /// 绘制时量好的几段文字的宽度（逻辑像素），供 [`App::commit_parts`] 排版：布局时不量文字。
@@ -156,7 +158,8 @@ pub(crate) struct CommitOverflow {
     pub y: f32,
     /// 伸出侧栏的那一段；全名在侧栏里写得下（只是要让开状态字母）时为 `None`。
     pub spill: Option<Rect>,
-    /// 文件行跟在全名后面的「打开文件」「回滚」两个按钮；目录行为 `None`。
+    /// 跟在全名后面的两个按钮位置：文件行是「打开文件」「回滚」等，目录行只用第二个（暂存、
+    /// 取消暂存）；没有按钮时为 `None`。
     pub actions: Option<(Rect, Rect)>,
 }
 
@@ -172,13 +175,13 @@ pub(crate) enum CommitName {
 /// 改动列表里的一组。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CommitGroup {
-    /// 已跟踪文件的改动和已暂存的新文件，默认勾上。
+    /// 暂存区视图中为未暂存的更改（含未跟踪的文件），勾选式下为已跟踪文件的更改，默认勾选。
     Changes,
     /// 合并、拣选、变基时有冲突的文件。
     ///
     /// 冲突须先于其他改动处理，因此单独成组并排在最上方，不与普通改动混排。
     Conflicts,
-    /// 未跟踪的文件（状态字母 U）：默认不勾，只有勾上才随提交加入仓库。
+    /// 未跟踪的文件，仅勾选式下有；默认不勾选，勾选后随提交加入仓库。
     Untracked,
     /// 暂存区中有内容的文件；只在暂存区视图中有。只暂存了一部分的文件同时列在「更改」一组。
     Staged,
@@ -211,20 +214,17 @@ impl CommitGroup {
         self as usize
     }
 
-    /// `entry` 是否属于这一组；`staging` 表示是否在暂存区视图中。
+    /// `entry` 是否属于这一组；`staging` 表示是否为暂存区视图。
     ///
-    /// 暂存区视图中「更改」一组只含有未暂存改动的文件，全部暂存的文件只在「已暂存的更改」中；
-    /// 勾选式下没有「已暂存的更改」，已跟踪文件的改动都在「更改」中。
+    /// 暂存区视图中，部分暂存的文件同时属于「暂存的更改」和「更改」。
     pub fn holds(self, entry: &Entry, staging: bool) -> bool {
         let plain = !entry.conflicted();
         match self {
             CommitGroup::Conflicts => entry.conflicted(),
             CommitGroup::Staged => staging && plain && entry.staged.is_some(),
-            CommitGroup::Changes if staging => {
-                plain && !entry.untracked() && entry.unstaged.is_some()
-            }
+            CommitGroup::Changes if staging => plain && entry.unstaged.is_some(),
             CommitGroup::Changes => plain && !entry.untracked(),
-            CommitGroup::Untracked => plain && entry.untracked(),
+            CommitGroup::Untracked => !staging && plain && entry.untracked(),
         }
     }
 }
@@ -291,6 +291,15 @@ pub(crate) struct CommitRows {
 type MemberStates = (u64, HashMap<(usize, usize), Option<bool>>);
 
 impl CommitRows {
+    /// 列表里的全部文件：（所在的组，`Status::entries` 的下标），按组的顺序、组内按列表中的
+    /// 顺序；收起的组和目录里的文件也在内。两组都有内容的文件出现两次。
+    pub(crate) fn files(&self) -> impl Iterator<Item = (CommitGroup, usize)> + '_ {
+        CommitGroup::ALL.into_iter().flat_map(move |group| {
+            let range = self.groups[group.index()].clone();
+            self.members[range].iter().map(move |&index| (group, index))
+        })
+    }
+
     /// 返回第 `row` 行所在的组：该行或它之前最近的组标题行；没有这一行时为 `None`。
     pub fn group_of(&self, row: usize) -> Option<CommitGroup> {
         self.rows.get(..=row)?.iter().rev().find_map(|r| match r {
@@ -371,7 +380,7 @@ pub(crate) struct CommitSticky {
 
 /// 固定在列表顶部的最大层数（层）。
 ///
-/// 5 是经验值：目录再深时固定的行已经占掉大半个列表。
+/// 取 5：目录再深时固定的行已经占掉大半个列表。
 const STICKY_MAX: usize = 5;
 
 /// 组、目录展开或收起的动画。
@@ -474,6 +483,9 @@ pub enum CommitTarget {
     /// 暂存区视图中组标题行尾的「＋」或「−」：暂存这一组的全部文件，「已暂存的更改」一组是
     /// 全部取消暂存。
     GroupStage(CommitGroup),
+    /// 暂存区视图中目录行尾的「＋」（第二项为真）或「−」：暂存或取消暂存这个目录下的全部
+    /// 文件；第一项同 [`CommitTarget::Dir`]。
+    DirStage(usize, bool),
     /// 另一个仓库的标题行（它在仓库列表中的下标）：切换到该仓库。
     OtherRepository(usize),
     /// 另一个仓库中的文件（仓库的下标，文件在其状态各项中的下标）：切换过去并选中该文件。
@@ -495,6 +507,8 @@ pub enum CommitTarget {
     /// 另一个仓库里的一组的标题行（仓库的下标，组）：折叠或展开这一组；暂存区视图中悬停时行尾
     /// 显示暂存、取消暂存整组的按钮。
     OtherGroup(usize, others::OtherGroup),
+    /// 其他仓库更改树的目录行，在 `commit_other_rows` 中的下标。
+    OtherDir(usize),
     /// 勾选式下另一个仓库里一组标题的勾选框：勾上或取消这一组的全部文件。
     OtherGroupFiles(usize, others::OtherGroup),
     /// 另一个仓库标题行左端的折叠箭头：折叠或展开这个仓库的一节。
@@ -513,7 +527,7 @@ pub enum CommitTarget {
     Group(CommitGroup),
     /// 组标题的勾选框：整组勾上或取消。
     GroupCheck(CommitGroup),
-    /// 悬停组标题时右端的「回滚」按钮：回滚这一组里勾上的文件（先确认）。
+    /// 组标题上的回滚按钮：暂存区视图中回滚「更改」到暂存区，勾选式下回滚勾选的文件。
     GroupRevert(CommitGroup),
     /// 储藏一组的标题：收起或展开。
     Stashes,
@@ -678,8 +692,8 @@ enum Outcome {
     Staged(Result<(), String>, PathBuf),
     /// 提交前检查完了新增的内容：其中 TODO、FIXME 的处数，在哪个仓库里检查的。
     TodoChecked(usize, PathBuf),
-    /// 提交前的格式化做完了：改动了几个文件，在哪个仓库里进行的。
-    Reformatted(usize, PathBuf),
+    /// 提交前的格式化做完了：改动了几个文件、几个没能格式化，在哪个仓库里进行的。
+    Reformatted(usize, usize, PathBuf),
     /// 写入其他仓库暂存区的一步操作完成，或者失败的原因。
     OtherStaged(Result<(), String>),
     /// 读到了文件在暂存区中的内容：仓库、文件、发出读取时暂存区的版本、内容（不是文本时为
@@ -745,23 +759,21 @@ pub(crate) struct CommitState {
     pub(crate) card: Slide,
     /// 「上一次提交」那一栏拉开、收起。
     pub(crate) undo: Slide,
-    /// 最近一帧画的上一次提交：栏收起途中（已经推送、撤销）照样写着它。
+    /// 最近一帧画的上一次提交：栏收起途中（已经推送、撤销）仍然显示它。
     undo_drawn: Option<LastCommit>,
     /// 是否修改上一次提交。
     pub amend: bool,
+    /// 提交以后并入的历史提交（「修正到此提交」「压缩到此提交」）。
+    pub(crate) into: Option<super::rewrite::Autosquash>,
     /// 打开「修改上一次提交」之前由用户填写的提交信息，关闭该模式时恢复。
     draft: Option<String>,
     /// 各位置写了一半的提交信息：切换仓库、工作树时不丢。
     drafts: HashMap<PathBuf, String>,
-    /// 勾选框的状态每被界面改动一次加 1，见 [`CommitRows::members_state`]。
-    checks: u64,
-    /// 是否显示暂存区：为真时各项的状态取自暂存区，列表分出「已暂存的更改」一组；为假（默认）
+    /// 是否显示暂存区：为真时各项的状态取自暂存区，列表分出「暂存的更改」一组；为假（默认）
     /// 时是勾选式，勾选记在下面几项中，提交时才写入暂存区。
     staging: bool,
-    /// 勾选式下用户取消勾选的文件；其余已跟踪的文件都勾着。
-    excluded: HashSet<PathBuf>,
-    /// 勾选式下用户勾上的未跟踪文件；其余未跟踪的文件都不勾。
-    included: HashSet<PathBuf>,
+    /// 勾选式下的勾选，提交时才写入暂存区。
+    picks: picks::Checks,
     /// 勾选式下在其他仓库中勾上的文件：提交时连同当前仓库勾上的文件，各自提交到所在的仓库。
     /// 其他仓库的文件默认都不勾。
     other_checked: HashSet<PathBuf>,
@@ -784,12 +796,12 @@ pub(crate) struct CommitState {
     pub(in crate::app::git) carry_in: bool,
     /// 多仓库时折叠着的其他仓库（组为 `None`）和其中折叠着的组，按仓库的根目录记。
     other_folds: HashSet<(PathBuf, Option<others::OtherGroup>)>,
+    /// 其他仓库更改树中收起的目录：仓库、分组、相对目录。
+    other_collapsed_dirs: HashSet<(PathBuf, others::OtherGroup, PathBuf)>,
     /// 「没有更改的仓库」一组是否展开；未选过时为 `None`，见 [`App::quiet_repositories_open`]。
     pub(crate) quiet_open: Option<bool>,
     /// 其他仓库各行的缓存（见 [`App::commit_other_rows`]）。
     other_rows: std::cell::RefCell<Option<(others::OtherRowsKey, Vec<others::OtherRow>)>>,
-    /// 勾选式下勾上的文件里取消勾选的各处改动：这些文件只提交其余的改动。
-    skipped: HashMap<PathBuf, Vec<Skip>>,
     /// 上一次见到的 `HEAD`：变化（切换分支、在别处提交）时按处的勾选作废，记下的行号不再对应。
     head: Option<String>,
     /// 等待写入暂存区的操作，按顺序逐个执行（见 [`App::pump_staging`]）。
@@ -806,7 +818,7 @@ pub(crate) struct CommitState {
     other_stage_queue: VecDeque<(PathBuf, bool, Vec<PathBuf>)>,
     /// 是否有写入其他仓库暂存区的操作正在后台执行。
     other_stage_running: bool,
-    /// 暂存区写完之后接着提交：按下提交时暂存的操作尚未完成。
+    /// 暂存区写完之后随后提交：按下提交时暂存的操作尚未完成。
     commit_queued: bool,
     /// 下一次提交不运行钩子；提交成功后关闭。
     pub(crate) no_verify: bool,
@@ -886,9 +898,8 @@ pub(crate) struct CommitState {
     pub(crate) stash_files_folded: bool,
     /// 储藏的预览标签：和改动列表的预览标签分开，那个标签跟着工作区里的文件刷新。
     pub(crate) stash_preview: Option<DocumentId>,
-    /// 是否为只读的浏览列表：列出历史提交中改动的文件（见 [`App::with_log_list`]），没有勾选框、
-    /// 回滚等修改工作区的操作，点击文件在差异标签中打开该文件。
-    pub(crate) browse: bool,
+    /// 正在询问新增的 TODO 要不要仍然提交：这次提交在等回答。
+    todo_asked: bool,
     /// 提交成功以后继续推送（「提交并推送」）。
     push_after: bool,
     /// 与 `push_after` 一起：推送改为同步，先拉取上游的新提交再推送（「提交并同步」）。
@@ -904,15 +915,23 @@ pub(crate) struct CommitState {
 }
 
 impl CommitState {
-    /// 创建只读的浏览列表（见 [`CommitState::browse`]），平铺和合并目录的设置同 `like`。
-    pub(crate) fn browsing(like: &CommitState) -> Self {
-        CommitState {
-            browse: true,
-            flat: like.flat,
-            sort: like.sort,
-            compact: like.compact,
-            ..CommitState::default()
-        }
+    /// 放弃「提交以后推送」：这次提交没有开始，或没有成功。
+    ///
+    /// 推送的意图只属于发起它的那一次提交；留到之后，下一次普通的提交会不经确认就推送。
+    pub(super) fn drop_push_intent(&mut self) {
+        self.push_after = false;
+        self.sync_after = false;
+    }
+
+    /// 是否有一次提交在进行或在等待：后台正在提交或检查、在等暂存写完，或在等用户回答。
+    pub(super) fn pending(&self) -> bool {
+        self.busy || self.commit_queued || self.todo_asked
+    }
+
+    /// 是否这次提交成功以后继续推送；只有在真实仓库里提交的测试用到，这些测试只在 Unix 上编译。
+    #[cfg(all(test, unix))]
+    pub(crate) fn pushes_after(&self) -> bool {
+        self.push_after
     }
 
     /// 是否显示暂存区（见 [`CommitState::staging`] 字段）。
@@ -925,7 +944,6 @@ impl CommitState {
         if self.staging != on {
             self.staging = on;
             self.reset_checks();
-            self.skipped.clear();
             self.index.clear();
             self.layout += 1;
         }
@@ -933,21 +951,12 @@ impl CommitState {
 
     /// 清除勾选式下的全部勾选，回到默认（提交完成以后）。
     pub(super) fn reset_checks(&mut self) {
-        self.excluded.clear();
-        self.included.clear();
-        self.checks += 1;
+        self.picks.reset();
     }
 
-    /// 勾选的版本：勾选每变一次加 1。
+    /// 勾选的版本：勾选每变一次加 1（见 [`picks::Checks::version`]）。
     pub(crate) fn checks(&self) -> u64 {
-        self.checks
-    }
-
-    /// 只选中 `path`，清掉多选。
-    pub(crate) fn select_only(&mut self, path: PathBuf) {
-        self.marked.clear();
-        self.anchor = Some(path.clone());
-        self.selected = Some(path);
+        self.picks.version()
     }
 
     /// 清掉选中的文件和多选（换目录时）。
@@ -969,11 +978,11 @@ impl Default for CommitState {
             undo: Slide::default(),
             undo_drawn: None,
             amend: false,
+            into: None,
             draft: None,
             drafts: HashMap::new(),
             staging: false,
-            excluded: HashSet::new(),
-            included: HashSet::new(),
+            picks: picks::Checks::default(),
             other_checked: HashSet::new(),
             other_skipped: HashMap::new(),
             other_heads: HashMap::new(),
@@ -982,9 +991,9 @@ impl Default for CommitState {
             others_left: 0,
             carry_in: false,
             other_folds: HashSet::new(),
+            other_collapsed_dirs: HashSet::new(),
             quiet_open: None,
             other_rows: Default::default(),
-            skipped: HashMap::new(),
             head: None,
             staging_queue: VecDeque::new(),
             staging_running: false,
@@ -1005,7 +1014,6 @@ impl Default for CommitState {
             compact: true,
             collapsed_dirs: Default::default(),
             layout: 0,
-            checks: 0,
             rows: RefCell::new(None),
             scroll: 0.0,
             motion: None,
@@ -1029,7 +1037,7 @@ impl Default for CommitState {
             stash_view: None,
             stash_files_folded: false,
             stash_preview: None,
-            browse: false,
+            todo_asked: false,
             push_after: false,
             sync_after: false,
             last: None,
@@ -1100,25 +1108,10 @@ impl App {
         }
     }
 
-    /// 提交视图是否正在显示；借用提交视图显示历史提交的文件时（`commit.browse`）同样为
-    /// `true`。
+    /// 提交视图是否正在显示。
     pub(crate) fn commit_shown(&self) -> bool {
         self.panels.sidebar.view == crate::layout::SidebarView::Commit
             && self.layout.sidebar.right() > 0.0
-            && (self.git.commit.browse || self.log_diff_tree().is_none())
-    }
-
-    /// 改动列表或历史提交的文件列表是否正在显示。
-    pub(in crate::app) fn commit_list_shown(&self) -> bool {
-        self.commit_shown() || self.log_diff_tree().is_some()
-    }
-
-    /// 返回正在显示的列表的状态：显示历史提交的文件时为其浏览列表，否则为提交视图。
-    pub(in crate::app) fn shown_commit_list(&self) -> &CommitState {
-        match self.log_diff_tree() {
-            Some(_) if !self.git.commit.browse => self.log_list(),
-            _ => &self.git.commit,
-        }
     }
 
     /// 是否显示提交卡片：有改动、有进行中的合并或变基、开着「修改上一次提交」或正在提交时显示。
@@ -1145,6 +1138,7 @@ impl App {
             && self.commit_parts().push.is_none()
             && !self.git.commit.busy
             && !self.git.commit.amend
+            && self.git.commit.into.is_none()
             && (self.git.status.as_ref()).is_some_and(|s| s.operation.is_none())
     }
 
@@ -1163,7 +1157,7 @@ impl App {
     ///
     /// 卡片出现时从视图底部滑上来，消失时（提交完、改动都没了）滑下去；上一次提交在提交以后拉开，
     /// 推送、撤销以后收起。上面的改动列表和储藏跟着移动。刚读到仓库状态（启动、换仓库）时和提交
-    /// 视图不在屏幕上时直接到终态：它们本来就在那里，切到提交视图时也不补放动画。
+    /// 视图不在屏幕上时直接到终态：它们原本就在那里，切到提交视图时也不补放动画。
     pub(in crate::app) fn track_commit_bars(&mut self) {
         let known = self.git.status.is_some();
         let card = known.then(|| self.commit_compose_shown());
@@ -1194,9 +1188,7 @@ impl App {
 
     /// 打开提交视图时焦点落在哪：显示提交卡片时在提交信息里，否则在改动列表上。
     pub(crate) fn commit_view_focus(&self) -> Focus {
-        if self.log_diff_tree().is_some() {
-            Focus::CommitList
-        } else if self.commit_compose_shown() {
+        if self.commit_compose_shown() {
             Focus::CommitMessage
         } else {
             Focus::CommitList
@@ -1329,7 +1321,7 @@ impl App {
     /// 仓库状态刷新了，`old` 是刷新前的状态，`rows` 是刷新前的各行（提交视图不在屏幕上时为
     /// `None`）：改动的文件变了时开始 [`CommitShift`]。
     ///
-    /// 只是内容变了（保存文件）时文件和各自的状态都不变，不做过渡，列表照常响应点击。组、目录
+    /// 只是内容变了（保存文件）时文件和各自的状态都不变，不做过渡，列表仍然响应点击。组、目录
     /// 正在展开或收起时也不做，两种动画不叠在一起。
     pub(in crate::app) fn begin_commit_shift(
         &mut self,
@@ -1357,10 +1349,9 @@ impl App {
 
     /// 窗口坐标的 `y` 是否落在写全名的那一改动行上：鼠标在这一行上时不唤出列表的滚动条，
     /// 和文件树相同。
-    pub(in crate::app) fn over_commit_overflow_row(&self, y: f32) -> bool {
-        self.commit_list_shown()
-            && (self.shown_commit_list().overflow)
-                .is_some_and(|o| (o.y..o.y + COMMIT_ROW).contains(&y))
+    pub(crate) fn over_commit_overflow_row(&self, y: f32) -> bool {
+        self.commit_shown()
+            && (self.git.commit.overflow).is_some_and(|o| (o.y..o.y + COMMIT_ROW).contains(&y))
     }
 
     /// 每帧算出 `overflow` 之后调用：换了写全名的文件行时，按钮从原位开始滑到全名后面；
@@ -1380,8 +1371,8 @@ impl App {
 
     /// 窗口坐标 (`x`, `y`) 是否在改动行伸出侧栏的那一段名字上。
     pub(in crate::app) fn in_commit_overflow(&self, x: f32, y: f32) -> bool {
-        self.commit_list_shown()
-            && (self.shown_commit_list().overflow)
+        self.commit_shown()
+            && (self.git.commit.overflow)
                 .and_then(|o| o.spill)
                 .is_some_and(|r| r.contains(x, y))
     }
@@ -1397,9 +1388,6 @@ impl App {
     }
 
     /// 打开提交视图（⌃⇧G），焦点放进提交信息。
-    ///
-    /// 当前标签是从日志打开的差异时，提交视图已经可见则在该差异的文件树与工作区改动之间
-    /// 切换，否则显示文件树（见 [`App::toggle_log_diff_tree`]）。
     pub(in crate::app) fn show_commit(&mut self) {
         // 不是仓库：仍然打开提交视图，那里写明原因并给出初始化和克隆的入口；没有可以写的提交
         // 信息，焦点不动。
@@ -1411,17 +1399,11 @@ impl App {
             self.request_redraw();
             return;
         }
-        // 从日志打开的差异标签中，提交视图在文件树与工作区改动之间切换。
-        self.toggle_log_diff_tree();
         if !self.panels.sidebar.visible {
             self.set_sidebar(true);
         }
         self.set_sidebar_view(crate::layout::SidebarView::Commit);
-        if self.log_diff_tree().is_some() {
-            self.reveal_log_diff_file();
-        } else {
-            self.git_refresh();
-        }
+        self.git_refresh();
         self.focus = self.commit_view_focus();
         self.request_redraw();
     }

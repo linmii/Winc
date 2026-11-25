@@ -6,6 +6,7 @@ use winc_core::transform::Case;
 use winc_editor::panes::Axis;
 use winc_editor::{Command, EntryKind, FoldCommand};
 use winc_preview::markdown::paragraph::Kind;
+use winit::keyboard::NamedKey;
 
 use super::*;
 use crate::field::TextField;
@@ -22,6 +23,12 @@ impl App {
 
         if !self.action_available(action) {
             return false;
+        }
+        // 「未提交的更改」中编辑的命令（复制、粘贴、撤销等）交给当前段，按差异标签处理。
+        if action.group() == crate::keymap::Group::Edit
+            && let Some(done) = self.in_combined_current(|app| app.run_action(action))
+        {
+            return done;
         }
         if action == Copy && self.vim_side_copy() {
             return true;
@@ -104,13 +111,10 @@ impl App {
             GoToSymbol => self.open_symbols(),
             GoToLine => self.open_goto(),
             GoToDefinition => self.go_to_definition(),
+            OpenLink => self.open_caret_link(),
             FindReferences => self.find_references(),
-            // 有日志标签且可以后退时先在日志里后退；日志里已经找不到的提交（例如被跳过的
-            // 父提交）直接跳过，继续找回更早的记录。
-            GoBack if self.log_navigate(false) => {}
-            GoForward if self.log_navigate(true) => {}
-            GoBack => self.navigate(false),
-            GoForward => self.navigate(true),
+            GoBack => self.navigate_history(false),
+            GoForward => self.navigate_history(true),
             Settings => self.open_settings(),
             ReleaseNotes => self.open_release_notes(crate::release_notes::Scope::All),
             KeyboardShortcuts => {
@@ -125,6 +129,8 @@ impl App {
             OpenFile => self.pick(Pick::Open),
             OpenFolder => self.pick(Pick::OpenFolder),
             AddFolder => self.ask_add_folder(),
+            SaveProjectAs => self.ask_save_project(),
+            OpenProject => self.pick(Pick::OpenProject),
             RemoteConnect => self.open_remote_picker(),
             RemoteDisconnect => self.remote_disconnect(),
             OpenRecent => self.open_recent_folders(),
@@ -141,12 +147,12 @@ impl App {
             }
             CloseOtherTabs => {
                 if let Some(id) = self.editor.active().map(|d| d.id) {
-                    let others = self.editor.documents.iter().map(|d| d.id);
+                    let others = self.editor.tabs().iter().map(|d| d.id);
                     self.close_tabs(others.filter(|&other| other != id).collect());
                 }
             }
             CloseAllTabs => {
-                let all = self.editor.documents.iter().map(|d| d.id).collect();
+                let all = self.editor.tabs().iter().map(|d| d.id).collect();
                 self.close_tabs(all);
             }
             ReopenClosed => self.reopen_closed(),
@@ -158,10 +164,19 @@ impl App {
             NextPane => self.cycle_pane(true),
             PreviousPane => self.cycle_pane(false),
             SplitTerminal => self.split_terminal(),
+            MoveTerminalToGroup => self.move_terminal_to_new_group(),
             NextTerminalPane => self.cycle_terminal_pane(true),
             PreviousTerminalPane => self.cycle_terminal_pane(false),
             NextTab => self.cycle_tab(true),
             PreviousTab => self.cycle_tab(false),
+            FocusTab1 | FocusTab2 | FocusTab3 | FocusTab4 | FocusTab5 | FocusTab6 | FocusTab7
+            | FocusTab8 | FocusTab9 => {
+                if let Some(index) = action.tab_index() {
+                    self.focus_tab_number(index);
+                }
+            }
+            SwitchTab => self.switch_tab(true),
+            SwitchTabBack => self.switch_tab(false),
             CloseFolder => self.close_folder(),
             // 只有一个窗口，关闭窗口就是退出，未保存的内容按退出的流程备份或询问。
             CloseWindow => self.request_close_window(),
@@ -261,6 +276,27 @@ impl App {
             }
             DeleteLine => editing(self, Command::DeleteLine),
             DeleteAllLeft => editing(self, Command::DeleteToLineStart),
+            CursorLeft => self.press_editor_key(NamedKey::ArrowLeft),
+            CursorRight => self.press_editor_key(NamedKey::ArrowRight),
+            CursorUp => self.press_editor_key(NamedKey::ArrowUp),
+            CursorDown => self.press_editor_key(NamedKey::ArrowDown),
+            CursorHome => self.press_editor_key(NamedKey::Home),
+            CursorEnd => self.press_editor_key(NamedKey::End),
+            CursorLineStart | CursorLineEnd => {
+                let extend = self.pointer.modifiers.shift_key();
+                self.run_key_command(if action == CursorLineStart {
+                    Command::WholeLineStart { extend }
+                } else {
+                    Command::WholeLineEnd { extend }
+                });
+            }
+            DeleteLeft => self.press_editor_key(NamedKey::Backspace),
+            DeleteRight => self.press_editor_key(NamedKey::Delete),
+            DeleteAllRight => editing(self, Command::DeleteToLineEnd),
+            CutToLineEnd => self.cut_to_line_end(),
+            TransposeLetters => editing(self, Command::TransposeChars),
+            InsertLineBreak => editing(self, Command::LineBreakInsert),
+            ScrollToCenter => self.recenter_caret(),
             IndentLines => editing(self, Command::IndentLines),
             OutdentLines => editing(self, Command::Outdent),
             MoveLinesUp => editing(self, Command::MoveLines { down: false }),
@@ -300,6 +336,19 @@ impl App {
             SortLinesAscending => editing(self, Command::SortLines { descending: false }),
             SortLinesDescending => editing(self, Command::SortLines { descending: true }),
             TrimTrailingWhitespace => editing(self, Command::TrimTrailingWhitespace),
+            UnescapeUnicode | EscapeUnicode => {
+                // 所有选区都是空的才转换整个文件，否则只转换选中的部分。
+                let whole = (self.editor.active())
+                    .is_some_and(|d| d.selections().0.iter().all(|s| s.is_empty()));
+                editing(
+                    self,
+                    if action == UnescapeUnicode {
+                        Command::UnescapeUnicode { whole }
+                    } else {
+                        Command::EscapeUnicode { whole }
+                    },
+                );
+            }
             IndentUsingSpaces => self.use_indent(false),
             IndentUsingTabs => self.use_indent(true),
             ConvertIndentationToSpaces => self.convert_indentation(false),
@@ -356,6 +405,15 @@ impl App {
             ReplaceOne if self.bars.find.open => self.replace_current(),
             ReplaceAll if self.bars.find.open => self.replace_all(),
             ReplaceOne | ReplaceAll => return false,
+            ToggleCase | ToggleWord | ToggleRegex
+                if matches!(self.focus, Focus::SearchDialog | Focus::SearchMask) =>
+            {
+                self.toggle_search_dialog_option(match action {
+                    ToggleCase => PanelButton::Case,
+                    ToggleWord => PanelButton::Word,
+                    _ => PanelButton::Regex,
+                })
+            }
             ToggleCase | ToggleWord | ToggleRegex if panel => {
                 self.press_panel_button(match action {
                     ToggleCase => PanelButton::Case,
@@ -376,7 +434,12 @@ impl App {
                 }
                 self.press_search_button(SearchButton::Filter);
             }
+            FindInFiles if self.search_style() == winc_config::SearchStyle::Dialog => {
+                self.open_search_dialog()
+            }
             FindInFiles => self.open_global_search(false),
+            OpenSearchDialog if self.focus.in_panel() => self.open_search_dialog_from_panel(),
+            OpenSearchDialog => self.open_search_dialog(),
             ReplaceInFiles => self.open_global_search(true),
             ReplaceAllInFiles => self.ask_replace_all(),
             NextResult => self.next_result(false),
@@ -430,13 +493,18 @@ impl App {
             // 差异标签里在两侧的改动之间跳；普通文件里在行号栏标出的改动之间跳。
             NextDifference | PreviousDifference => {
                 let forward = action == NextDifference;
-                if self.editor.active().is_some_and(|d| d.diff.is_some()) {
+                if self.combined_active() {
+                    self.step_combined_change(forward);
+                } else if self.editor.active().is_some_and(|d| d.diff.is_some()) {
                     self.jump_difference(forward);
                 } else if self.jump_conflict(forward) {
                     // 有合并冲突的文件里先在冲突之间跳。
                 } else if !self.jump_change(forward) {
                     return false;
                 }
+            }
+            NextDiffFile | PreviousDiffFile if self.combined_active() => {
+                self.step_combined_file(action == NextDiffFile);
             }
             NextDiffFile | PreviousDiffFile => {
                 if !self.editor.active().is_some_and(|d| d.diff.is_some()) {
@@ -451,11 +519,16 @@ impl App {
                 self.settings_toggle(crate::layout::Setting::DiffInline);
             }
             GitShowChanges => self.git_show_changes(),
+            GitShowAllChanges => self.open_combined(None),
+            GitToggleCombinedDiff => self.toggle_combined_diff(),
             ChangesShowDiff | ChangesOpenSource | ChangesRollback => {
                 return self.run_changes_action(action);
             }
             GitShowLog => self.git_show_log(),
             GitGoToRevision => self.open_go_to_revision(),
+            GitRewordCommit => self.reword_selected_commit(),
+            GitGoToChildCommit => self.go_to_log_relative(false),
+            GitGoToParentCommit => self.go_to_log_relative(true),
             GitShowOutput => self.show_git_output(),
             GitClone => self.open_clone_dialog(),
             GitInit => self.git_init(),
@@ -464,15 +537,22 @@ impl App {
             GitNewWorktree => self.open_worktree_dialog(),
             // 这几个命令要在仓库里：不在时说明，不弹空的选择器、不跑注定失败的 `git`。
             GitSwitchBranch | GitNewBranch | GitStash | GitSync | GitFetch | GitPull
-            | GitPullRebase | GitPush | GitStageAll | GitUnstageAll | GitStageFile
+            | GitPullRebase | GitPullFrom | GitPush | GitPushTo | GitStageAll | GitUnstageAll
+            | GitStageFile
                 if self.git.root.is_none() =>
             {
                 self.flash(winc_i18n::t!("git-not-a-repository"));
+            }
+            // 拉取自…、推送到…按当前分支选目标：游离的 `HEAD` 上没有分支可用。
+            GitPullFrom | GitPushTo if !self.on_branch() => {
+                self.flash(winc_i18n::t!("git-not-on-branch"));
             }
             GitSwitchBranch => self.switch_branch_from_command(),
             GitNewBranch => self.open_branch_dialog(None, None),
             GitStash => self.open_stash_prompt(),
             GitSync => self.git_sync(),
+            GitPullFrom => self.open_pull_dialog(),
+            GitPushTo => self.push_to(),
             GitStageAll => self.stage_all(true),
             GitUnstageAll => self.stage_all(false),
             GitStageFile => self.stage_current_file(),
@@ -501,6 +581,7 @@ impl App {
             RunConfiguration => self.run_current_config(),
             StopConfiguration => self.stop_current_config(),
             EditRunConfigurations => self.edit_run_configs(),
+            SendHttpRequest => return self.send_http_request(None),
             ClearTerminal => self.clear_terminal(),
             TerminalCopy => self.terminal_copy(false),
             TerminalPaste => self.terminal_paste(),
@@ -542,6 +623,14 @@ impl App {
         match action {
             Action::Plugin(slot) => return self.plugin_available(slot),
             Action::RunConfiguration if self.editor.root().is_none() => return false,
+            // 编辑提交说明只在日志里可用；其余位置同一个键执行其他命令。
+            Action::GitRewordCommit if !self.log_active() => return false,
+            // 转到子提交、父提交只在日志的提交列表上可用：文件列表里 `←` 是返回。
+            Action::GitGoToChildCommit | Action::GitGoToParentCommit
+                if !self.log_list_focused() =>
+            {
+                return false;
+            }
             // 只有打开的目录还不是仓库时才能初始化。
             Action::GitInit if self.editor.root().is_none() || self.git.root.is_some() => {
                 return false;
@@ -556,6 +645,8 @@ impl App {
             }
             action if action.markdown_only() && !self.markdown_keys() => return false,
             Action::EditRunConfigurations if self.editor.root().is_none() => return false,
+            // 只在 `.http` 请求文件中可用；其余文件中同一个键执行其他命令。
+            Action::SendHttpRequest if !self.active_is_http() => return false,
             // 窗格的命令只在有东西可拆、可换时可用，否则同一个键执行其他命令或交给终端。
             Action::SplitRight | Action::SplitDown if self.editor.active.is_none() => {
                 return false;

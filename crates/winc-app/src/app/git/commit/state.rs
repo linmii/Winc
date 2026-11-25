@@ -3,14 +3,15 @@
 use winc_core::diff::Pick;
 use winc_editor::diff_view::DiffView;
 
+use crate::app::git::DiffKind;
+
 use super::*;
 
 impl CommitState {
     /// 返回当前按下「提交」不会提交的原因；可以提交（或正在提交）时为 `None`。
     ///
-    /// 检查项与 [`App::git_commit`] 相同。提交按钮据此置灰，悬停提示显示原因。
-    /// 冲突标记按状态中读取的结果判断：编辑器中刚移除、尚未保存时按钮仍置灰，
-    /// 按下后先保存再重新检查。
+    /// 检查项与 [`App::git_commit`] 相同。提交按钮据此置灰，悬停提示显示原因。冲突标记按状态中读取
+    /// 的结果判断：编辑器中刚移除、尚未保存时按钮仍置灰，按下后先保存再重新检查。
     ///
     /// `others` 是其他仓库里随之提交的文件数：勾选式下勾上的（见 [`App::other_checked_count`]），
     /// 暂存区视图中暂存的（见 [`App::other_staged_count`]）；不为 0 时当前仓库没有内容也可以提交。
@@ -102,11 +103,20 @@ impl CommitState {
         }
     }
 
-    /// 返回文件 `entry` 在差异 `view` 中各段改动的暂存状态，下标同 `view.hunks`。
+    /// 返回文件 `entry` 在差异 `view`（比较的两份内容为 `kind`）中各段改动的暂存状态，下标同
+    /// `view.hunks`。
     ///
     /// [`Pick::Apply`] 为已暂存，[`Pick::Skip`] 为未暂存，[`Pick::Lines`] 列出未暂存的行。该文件
-    /// 只能按文件暂存（见 [`stages_by_hunk`]）、暂存区中的内容不是文本时为空。
-    pub fn hunk_inclusions(&self, entry: &Entry, view: &DiffView) -> Vec<Pick> {
+    /// 只能按文件暂存（见 [`stages_by_hunk`]）、暂存区中的内容不是文本时为空。分开显示时，「更改」
+    /// 中的各段都未暂存，「暂存的更改」中的各段都已暂存。
+    pub fn hunk_inclusions(&self, entry: &Entry, view: &DiffView, kind: DiffKind) -> Vec<Pick> {
+        let count = view.hunks.len();
+        match kind {
+            DiffKind::Whole => {}
+            _ if !self.staging || !stages_by_hunk(entry) => return Vec::new(),
+            DiffKind::Unstaged => return vec![Pick::Skip; count],
+            DiffKind::Staged => return vec![Pick::Apply; count],
+        }
         if !self.staging {
             let all: HunkIds = (view.keys.iter().zip(&view.hunks))
                 .map(|(&key, hunk)| (key, hunk.old.clone()))
@@ -116,7 +126,6 @@ impl CommitState {
         if !stages_by_hunk(entry) {
             return Vec::new();
         }
-        let count = view.hunks.len();
         if entry.staged.is_none() {
             return vec![Pick::Skip; count];
         }
@@ -155,7 +164,7 @@ impl CommitState {
     /// 界面改动了暂存区：此前发出的读取结果不再采用，勾选框的缓存作废。
     pub(in crate::app) fn index_changed(&mut self) {
         self.index_version += 1;
-        self.checks += 1;
+        self.picks.touch();
     }
 
     /// 刚读到的状态是否已经过时：暂存的操作尚未写完，或者这次读取开始于某次暂存的操作之前。
@@ -235,15 +244,6 @@ impl CommitState {
         self.layout += 1;
     }
 
-    /// 展开 `dir`（相对仓库根目录）及其各级上级目录，以及所在的组，使其中的文件可见。
-    pub(crate) fn expand_to(&mut self, dir: &Path) {
-        for i in 0..CommitGroup::COUNT {
-            self.collapsed[i] = false;
-            self.collapsed_dirs[i].retain(|collapsed| !dir.starts_with(collapsed));
-        }
-        self.layout += 1;
-    }
-
     /// 设定是否把只有一个子目录、没有文件的各级目录合成一行。
     pub(crate) fn set_compact(&mut self, compact: bool) {
         if self.compact != compact {
@@ -274,7 +274,7 @@ impl CommitState {
     }
 
     /// 按 [`CommitState::sort`] 排 `files`（各项在状态中的下标和相对仓库根的路径）。
-    fn sort_files(&self, status: &Status, files: &mut [(usize, &Path)]) {
+    pub(super) fn sort_files(&self, status: &Status, files: &mut [(usize, &Path)]) {
         let letter = |index: usize| status.entries.get(index).map(|e| e.shown().letter());
         files.sort_by(|a, b| match self.sort {
             CommitSort::Path => natural_path_cmp(a.1, b.1),
@@ -293,6 +293,7 @@ impl CommitState {
         self.collapsed = [collapse; CommitGroup::COUNT];
         if !collapse {
             self.forget_dirs();
+            self.other_collapsed_dirs.clear();
         }
         self.layout += 1;
     }
@@ -436,9 +437,9 @@ type HunkIds = Vec<(u64, Range<usize>)>;
 /// 提交按钮按下时提交的范围。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommitScope {
-    /// 暂存区中这么多个文件的内容。
+    /// 暂存区中 `n` 个文件的内容。
     Staged(usize),
-    /// 没有暂存任何内容：全部已跟踪文件的改动，共这么多个文件。
+    /// 没有暂存任何内容：全部已跟踪文件的改动，共 `n` 个文件。
     All(usize),
     /// 没有可以提交的内容。
     Nothing,
@@ -483,7 +484,7 @@ fn natural_path_cmp(a: &Path, b: &Path) -> std::cmp::Ordering {
 }
 
 /// `items`（下标、相对路径）都在同一个子目录里、这一层没有文件时，返回那个子目录的名字。
-fn only_subdir<'a>(items: &[(usize, &'a Path)]) -> Option<&'a OsStr> {
+pub(in crate::app::git) fn only_subdir<'a>(items: &[(usize, &'a Path)]) -> Option<&'a OsStr> {
     let first = |p: &'a Path| {
         let mut parts = p.components();
         let first = parts.next()?.as_os_str();
@@ -498,7 +499,7 @@ fn only_subdir<'a>(items: &[(usize, &'a Path)]) -> Option<&'a OsStr> {
 
 /// 按自然顺序排的目录名，用作 `BTreeMap` 的键。
 #[derive(PartialEq, Eq)]
-struct NaturalName<'a>(&'a OsStr);
+pub(in crate::app::git) struct NaturalName<'a>(pub &'a OsStr);
 
 impl Ord for NaturalName<'_> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {

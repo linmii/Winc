@@ -411,7 +411,7 @@ fn font_weight_changes_the_ink_of_every_kind_of_font() {
         let mut renderer =
             Renderer::offscreen(60.0, 40.0, 1.0, Color::hex(0x000000), None, None).unwrap();
         renderer
-            .set_fonts(std::slice::from_ref(spec), &[], &[], weight)
+            .set_fonts(std::slice::from_ref(spec), &[], &[], weight, weight)
             .unwrap();
         let mut advance = 0.0;
         renderer.draw(|frame| {
@@ -448,6 +448,40 @@ fn font_weight_changes_the_ink_of_every_kind_of_font() {
         } else {
             assert_eq!(light, regular, "{c}");
         }
+    }
+}
+
+/// 终端的字重与其余文字分开：终端的文字（含后备字体中的汉字）按终端的字重画，编辑区不变；
+/// 两者相同时画出的完全一样。
+#[cfg(target_os = "macos")]
+#[test]
+fn the_terminal_weight_changes_only_the_terminal_ink() {
+    let sf = FontSpec::Path("/System/Library/Fonts/SFNSMono.ttf".into());
+    let ink = |(weight, terminal): (u16, u16), kind: FontKind, c: char| {
+        let mut renderer =
+            Renderer::offscreen(60.0, 40.0, 1.0, Color::hex(0x000000), None, None).unwrap();
+        renderer
+            .set_fonts(std::slice::from_ref(&sf), &[], &[], weight, terminal)
+            .unwrap();
+        renderer.draw(|frame| {
+            let all = frame.bounds();
+            let text = c.to_string();
+            frame.text(kind, 30.0, 5.0, 32.0, &text, Color::hex(0xffffff), all);
+        });
+        let image = renderer.image().unwrap();
+        image.pixels.iter().map(|p| p & 0xff).sum::<u32>()
+    };
+    for c in ['H', '中'] {
+        let regular = ink((400, 400), FontKind::Terminal, c);
+        assert_eq!(ink((400, 400), FontKind::Mono, c), regular, "{c}");
+        let bold = ink((400, 700), FontKind::Terminal, c);
+        assert!(
+            bold as f32 > regular as f32 * 1.15,
+            "{c}：{regular} → {bold}"
+        );
+        assert_eq!(ink((400, 700), FontKind::Mono, c), regular, "{c}");
+        // 全局调粗、终端仍是常规字重：终端不随之变粗。
+        assert_eq!(ink((700, 400), FontKind::Terminal, c), regular, "{c}");
     }
 }
 
@@ -525,7 +559,7 @@ fn translucent_checkers_draw_only_the_visible_cells() {
 }
 
 /// 背景图在窗口背景、声明的底色和之后以这些颜色填充的矩形之下透出，颜色为「图片 × 不透明度 +
-/// 底色 × (1 − 不透明度)」；其余颜色照常绘制。底色声明与否画面相同。
+/// 底色 × (1 − 不透明度)」；其余颜色仍然绘制。底色声明与否画面相同。
 #[test]
 fn the_wallpaper_shows_under_surface_colors_only() {
     let (bg, card, other) = (
@@ -569,7 +603,7 @@ fn the_wallpaper_shows_under_surface_colors_only() {
         (at(5, 2), at(7, 7), at(5, 7)),
         (0x108f10, 0x8f8f8f, 0x8f8f8f)
     );
-    // 不是底色的颜色照常绘制。
+    // 不是底色的颜色仍然绘制。
     assert_eq!(at(6, 0), 0x808080);
     // 圆角外侧的像素向背景色之下的图片过渡（弧线上的像素按覆盖比例混合）。
     let corner = at(0, 0);

@@ -54,13 +54,10 @@ fn risky_key(key: &str) -> bool {
 
 /// 从 `git config --list --show-scope -z` 的输出和 git 实际使用的 hooks 目录里找出 [`Risks`]。
 ///
-/// 只看仓库自己的配置（`local`、`worktree` 范围，含它们 `include` 进来的文件）：系统和用户
-/// 范围的配置由用户自己维护，视为用户的选择。`core.fsmonitor` 是布尔值时运行的是
-/// `git` 自带的监视进程，不计入。
-///
-/// 钩子目录由 [`hooks_dir`] 确定，其中可执行的普通文件都计入，`.sample` 示例除外。
-/// `root` 是工作树的根目录，`default` 是共用的 git 目录下的 `hooks`，
-/// `home` 是 `root` 所在系统中用户的主目录。
+/// 只看仓库自己的配置（`local`、`worktree` 范围，含 `include` 进来的文件），系统和用户范围的
+/// 视为用户的选择；`core.fsmonitor` 是布尔值时运行的是 `git` 自带的监视进程，不计入。钩子目录
+/// 由 [`hooks_dir`] 确定，其中可执行的普通文件都计入，`.sample` 示例除外。`root` 是工作树的
+/// 根目录，`default` 是共用的 git 目录下的 `hooks`，`home` 是 `root` 所在系统中用户的主目录。
 pub(super) fn parse_risks(
     stdout: &[u8],
     root: &Path,
@@ -172,6 +169,39 @@ fn hooks_dir(
     Some((dir, label))
 }
 
+/// 把各范围的 `git config --list -z` 输出拼成 `--show-scope` 的格式：每项之前是范围的名字，
+/// 各段之后跟一个 0 字节。
+pub(super) fn join_scopes(scopes: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (scope, entries) in scopes {
+        for entry in entries.split(|&b| b == 0).filter(|e| !e.is_empty()) {
+            out.extend_from_slice(scope.as_bytes());
+            out.push(0);
+            out.extend_from_slice(entry);
+            out.push(0);
+        }
+    }
+    out
+}
+
+/// 仓库的配置 `local`（`git config --list -z` 的输出）是否开启了 `extensions.worktreeConfig`。
+pub(super) fn worktree_config(local: &[u8]) -> bool {
+    local.split(|&b| b == 0).any(|entry| {
+        let entry = String::from_utf8_lossy(entry);
+        match entry.split_once('\n') {
+            Some((key, value)) => {
+                key == "extensions.worktreeconfig"
+                    && matches!(
+                        value.to_ascii_lowercase().as_str(),
+                        "true" | "yes" | "on" | "1"
+                    )
+            }
+            // 只写了键名的布尔项是真。
+            None => entry == "extensions.worktreeconfig",
+        }
+    })
+}
+
 #[cfg(unix)]
 fn executable(metadata: &winc_backend::fs::Metadata) -> bool {
     metadata.unix.is_some_and(|unix| unix.mode & 0o111 != 0)
@@ -213,6 +243,8 @@ pub(super) struct Trust {
     risks: HashMap<PathBuf, Arc<Risks>>,
     /// 用户信任的仓库和当时记下的 [`Risks::fingerprint`]。
     trusted: HashMap<PathBuf, u64>,
+    /// `git` 不支持 `--show-scope` 的仓库：按范围分别读配置（见 [`Git::config_by_scope`]）。
+    unscoped: std::collections::HashSet<PathBuf>,
 }
 
 impl Git {
@@ -225,16 +257,9 @@ impl Git {
     ///
     /// `git config` 运行失败时返回原因。
     pub fn inspect(&self, root: &Path) -> Result<Arc<Risks>, String> {
-        let mut command = self.at(root);
-        command.args(["-c", "core.fsmonitor=false"]).args([
-            "config",
-            "--list",
-            "--show-scope",
-            "-z",
-        ]);
         // 配置和 hooks 目录的位置互不依赖：远端的仓库上同时读取。
         let common = || git_common_dir(root);
-        let run = || self.run(&mut command, SHOW_TIMEOUT, &Cancel::default());
+        let run = || self.scoped_config(root);
         let (common, stdout) = crate::background::both(winc_backend::is_remote(root), common, run);
         let stdout = stdout?;
         let hooks = common.map(|d| d.join("hooks"));
@@ -249,18 +274,67 @@ impl Git {
         Ok(risks)
     }
 
+    /// 仓库 `root` 各范围的配置，格式同 `git config --list --show-scope -z`。
+    ///
+    /// `--show-scope` 是 2.26 加入的：更早的 `git` 按用法错误退出（退出码 129）时改为按范围
+    /// 分别读取（[`Git::config_by_scope`]），之后这个仓库直接这样读。
+    fn scoped_config(&self, root: &Path) -> Result<Vec<u8>, String> {
+        if !self.lock().unscoped.contains(root) {
+            let mut command = self.at(root);
+            command
+                .args(["-c", "core.fsmonitor=false"])
+                .args(["config", "--list", "--show-scope", "-z"])
+                .stderr(Stdio::piped());
+            let output = process::run(&mut command, Vec::new(), SHOW_TIMEOUT, &Cancel::default())
+                .map_err(|e| describe(&e))?;
+            match output.status.code() {
+                Some(0) => return Ok(output.stdout),
+                Some(129) => _ = self.lock().unscoped.insert(root.to_path_buf()),
+                _ => return Err(failure(&output.stderr)),
+            }
+        }
+        self.config_by_scope(root)
+    }
+
+    /// 分别读仓库 `root` 系统、用户、仓库和工作树范围的配置（各自 `include` 进来的文件算在同
+    /// 一范围），拼成 `--show-scope` 的格式（[`join_scopes`]），指纹与之相同。
+    ///
+    /// 系统、用户的配置文件不存在时 `git` 报错，按没有配置处理；仓库的配置读不出时返回原因。
+    pub(super) fn config_by_scope(&self, root: &Path) -> Result<Vec<u8>, String> {
+        let list = |scope: &str| {
+            let mut command = self.at(root);
+            command.args(["config", scope, "--includes", "--list", "-z"]);
+            self.run(&mut command, SHOW_TIMEOUT, &Cancel::default())
+        };
+        let remote = winc_backend::is_remote(root);
+        let user = || crate::background::both(remote, || list("--system"), || list("--global"));
+        let ((system, global), local) = crate::background::both(remote, user, || list("--local"));
+        let local = local?;
+        // 没有开启 `extensions.worktreeConfig` 时 `--worktree` 读的就是仓库的配置，不再读。
+        let worktree = match worktree_config(&local) {
+            true => list("--worktree").unwrap_or_default(),
+            false => Vec::new(),
+        };
+        Ok(join_scopes(&[
+            ("system", &system.unwrap_or_default()),
+            ("global", &global.unwrap_or_default()),
+            ("local", &local),
+            ("worktree", &worktree),
+        ]))
+    }
+
     /// 记下用户信任了仓库 `root` 的 `fingerprint` 所对应的配置。
     ///
-    /// 之后的命令在检查出的指纹与它相同时照常运行；配置变化后指纹不同，需要重新确认。
+    /// 之后的命令在检查出的指纹与它相同时仍然运行；配置变化后指纹不同，需要重新确认。
     pub fn trust(&self, root: &Path, fingerprint: u64) {
         self.lock().trusted.insert(root.to_path_buf(), fingerprint);
     }
 
-    /// 仓库 `root` 的配置是否可以照常使用：没有会运行命令的设置，或者用户信任了现在的设置。
+    /// 仓库 `root` 的配置是否可以继续使用：没有会运行命令的设置，或者用户信任了现在的设置。
     ///
     /// 还没检查过时先检查；检查失败时按不可信处理。
     ///
-    /// 返回不可信时检查出的 [`Risks`]，可以照常使用时返回 `None`。
+    /// 返回不可信时检查出的 [`Risks`]，可以继续使用时返回 `None`。
     pub fn untrusted(&self, root: &Path) -> Option<Arc<Risks>> {
         let cached = self.lock().risks.get(root).cloned();
         let risks = match cached {
