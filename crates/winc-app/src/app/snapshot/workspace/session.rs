@@ -309,7 +309,7 @@ fn restoring_without_a_session_keeps_the_active_tab() {
 }
 
 #[test]
-fn files_requested_at_launch_stay_active_while_unsaved_tabs_are_restored() {
+fn files_requested_at_launch_stay_active_and_rightmost_while_unsaved_tabs_are_restored() {
     for with_folder in [false, true] {
         for target_dirty in [false, true] {
             let name = format!("launch-backups-{with_folder}-{target_dirty}");
@@ -356,6 +356,12 @@ fn files_requested_at_launch_stay_active_while_unsaved_tabs_are_restored() {
             assert_eq!(editor.active().unwrap().name(), "右键打开 file.txt");
             assert_eq!(editor.active().unwrap().is_dirty(), target_dirty);
             assert_eq!(editor.documents.len(), 3, "恢复草稿，不重复打开请求的文件");
+            assert!(
+                editor.tabs()[0].path.is_none(),
+                "草稿排在右键打开的文件之前"
+            );
+            assert_eq!(editor.tabs()[1].name(), "右键打开 file.txt");
+            assert_eq!(editor.tabs()[2].name(), "second.txt");
             let draft = editor
                 .documents
                 .iter()
@@ -1426,7 +1432,7 @@ fn only_the_latest_stored_state_replaces_the_one_in_memory() {
 /// 换目录后上次的标签在后台读好之前：这时记现场不盖掉要恢复的那一份；期间打开的文件在标签
 /// 恢复后仍是当前标签。
 #[test]
-fn a_file_opened_while_tabs_are_restored_stays_current() {
+fn a_file_opened_while_tabs_are_restored_stays_current_and_rightmost() {
     let dir = sample_folder("restore-gap");
     let mut app = app_with(&dir, false);
     let root = app.editor.root().unwrap().to_path_buf();
@@ -1456,10 +1462,7 @@ fn a_file_opened_while_tabs_are_restored_stays_current() {
     let paths: Vec<_> = (app.editor.documents.iter())
         .filter_map(|doc| doc.path.clone())
         .collect();
-    assert!(
-        paths.contains(&first) && paths.contains(&second),
-        "{paths:?}"
-    );
+    assert_eq!(paths, [first, second.clone()]);
     assert_eq!(
         app.editor.active().unwrap().path.as_deref(),
         Some(second.as_path())
