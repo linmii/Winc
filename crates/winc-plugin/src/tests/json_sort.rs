@@ -90,8 +90,10 @@ fn rejects_invalid_json_and_duplicate_decoded_keys() {
         "{a:1}",
         "{\"a\" 1}",
         "{\"a\":}",
-        "[1,]",
-        "{\"a\":1,}",
+        "[,]",
+        "{,}",
+        "[1,,]",
+        "{\"a\":1,,}",
         "[1 2]",
         "[1,,2]",
         "true false",
@@ -106,8 +108,13 @@ fn rejects_invalid_json_and_duplicate_decoded_keys() {
         ".1",
         "1e",
         "1e+",
-        "// comment\n{}",
-        "{ /* comment */ }",
+        "/* unterminated",
+        "// no value",
+        "{\"a\":1 / 2}",
+        "[1 /* comment */ 2]",
+        "{\"a\":1, /* unterminated",
+        "callback({\"a\":1})",
+        "{'a':1}",
         "\"unterminated",
         "\"line\nbreak\"",
         r#""\x20""#,
@@ -124,6 +131,99 @@ fn rejects_invalid_json_and_duplicate_decoded_keys() {
             "accepted invalid JSON: {text:?}"
         );
     }
+}
+
+#[test]
+fn reports_actionable_errors_with_unicode_and_line_ending_coordinates() {
+    let (_dir, plugin) = example();
+    for ending in ["\n", "\r\n", "\r"] {
+        let before = format!("{{{ending}  \"中文😀\": 1 x{ending}}}");
+        let error = run(&plugin, &before, ending).unwrap_err().to_string();
+        assert!(error.contains("元素之间缺少逗号"), "{error}");
+        assert!(error.contains("line 2, column 12"), "{error}");
+        assert!(
+            error.contains(&format!("byte {}", before.find('x').unwrap() + 1)),
+            "{error}"
+        );
+    }
+    for (before, reason, location) in [
+        (
+            "\n/* incomplete",
+            "unterminated block comment",
+            "line 2, column 1",
+        ),
+        (
+            "{a:1}",
+            "expected a double-quoted object key",
+            "line 1, column 2",
+        ),
+        ("{\"a\" 1}", "expected ':'", "line 1, column 6"),
+        ("[1 2]", "expected ','", "line 1, column 4"),
+        ("[1", "expected ','", "line 1, column 3"),
+    ] {
+        let error = run(&plugin, before, "\n").unwrap_err().to_string();
+        assert!(error.contains(reason), "{error}");
+        assert!(error.contains(location), "{error}");
+    }
+}
+
+#[test]
+fn sorts_jsonc_and_keeps_comments_with_their_fields() {
+    let (_dir, plugin) = example();
+    let before = concat!(
+        "// config\n{\n",
+        "  // z docs\n  \"z\": {\"b\":2,\"a\":1,}, // z tail\n",
+        "  // a docs\n  \"a\": [\n    // first\n    {\"z\":0,\"a\":1},\n    2,\n  ], /* a tail */\n",
+        "  // container footer\n}\n// file footer\n"
+    );
+    let after = concat!(
+        "// config\n{\n",
+        "  // a docs\n  \"a\": [\n    // first\n    {\n      \"a\": 1,\n      \"z\": 0\n    },\n    2\n  ], /* a tail */\n",
+        "  // z docs\n  \"z\": {\n    \"a\": 1,\n    \"b\": 2\n  } // z tail\n",
+        "  // container footer\n}\n// file footer\n"
+    );
+    for ending in ["\n", "\r\n", "\r"] {
+        let before = before.replace('\n', ending);
+        let after = after.replace('\n', ending);
+        let sorted = run(&plugin, &before, ending).unwrap();
+        assert_eq!(sorted, after);
+        assert_eq!(run(&plugin, &sorted, ending).unwrap(), sorted);
+    }
+}
+
+#[test]
+fn accepts_trailing_commas_and_comments_without_changing_strings() {
+    let (_dir, plugin) = example();
+    for (before, after) in [
+        ("[1,2,]", "[\n  1,\n  2\n]"),
+        ("{\"b\":2,\"a\":1,}", "{\n  \"a\": 1,\n  \"b\": 2\n}"),
+        ("{/* empty */}", "{\n  /* empty */\n}"),
+        ("[// empty\n]", "[\n  // empty\n]"),
+        ("/* header */null// footer", "/* header */\nnull // footer"),
+        ("[1 // first\n, 2]", "[\n  1, // first\n  2\n]"),
+        (
+            "{\"z\"/* key */:/* value */1,\"a\":2}",
+            "{\n  \"a\": 2,\n  \"z\" /* key */ : /* value */ 1\n}",
+        ),
+        (
+            "{\"z\"// key\n:// value\n1,\"a\":2}",
+            "{\n  \"a\": 2,\n  \"z\" // key\n  : // value\n  1\n}",
+        ),
+        (
+            r#"{"z":"https://a/b/*c*/","a":"// \"escaped\" /* */",}"#,
+            "{\n  \"a\": \"// \\\"escaped\\\" /* */\",\n  \"z\": \"https://a/b/*c*/\"\n}",
+        ),
+    ] {
+        let sorted = run(&plugin, before, "\n").unwrap();
+        assert_eq!(sorted, after);
+        assert_eq!(run(&plugin, &sorted, "\n").unwrap(), sorted);
+    }
+    // Preserve block comment contents verbatim apart from the document's line endings.
+    let before = "{\"z\":1,\n/* multi\n * line */\n\"a\":2}";
+    let sorted = run(&plugin, before, "\n").unwrap();
+    assert!(sorted.contains("/* multi\n * line */"));
+    assert!(sorted.find("/* multi").unwrap() < sorted.find("\"a\"").unwrap());
+    assert_eq!(run(&plugin, &sorted, "\n").unwrap(), sorted);
 }
 
 #[test]

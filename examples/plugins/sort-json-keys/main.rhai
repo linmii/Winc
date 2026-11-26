@@ -1,7 +1,27 @@
 // Sort object keys recursively without converting JSON numbers to floating point.
 // Parse bytes through `this` so recursive calls share one cursor; arrays keep their order.
 fn fail(message) {
-    throw "JSON 格式错误 / Invalid JSON (byte " + (this.pos + 1) + "): " + message;
+    // Compute source coordinates only on failure; count UTF-8 characters and CRLF as one newline.
+    let line = 1;
+    let column = 1;
+    let previous = -1;
+    let end = if this.pos < this.data.len { this.pos } else { this.data.len };
+    for i in 0..end {
+        let byte = this.data[i];
+        if byte == 13 {
+            line += 1;
+            column = 1;
+        } else if byte == 10 {
+            if previous != 13 { line += 1; }
+            column = 1;
+        } else if (byte & 192) != 128 {
+            column += 1;
+        }
+        previous = byte;
+    }
+    throw "JSON 格式错误 / Invalid JSON: " + message
+        + " (第 " + line + " 行，第 " + column + " 列 / line " + line
+        + ", column " + column + "; byte " + (end + 1) + ")";
 }
 
 fn peek() {
@@ -12,8 +32,86 @@ fn skip_space() {
     while this.peek() in [32, 9, 10, 13] { this.pos += 1; }
 }
 
+// Keep comments as tokens, never search/replace inside string values (URLs can contain //).
+// Same-line comments belong to the previous value; standalone comments lead the next one.
+fn read_comments(inline_only) {
+    let comments = [];
+    loop {
+        while this.peek() in [32, 9, 10, 13] {
+            if inline_only && this.peek() in [10, 13] { return comments; }
+            this.pos += 1;
+        }
+        if this.peek() != 47 { return comments; }
+        let start = this.pos;
+        this.pos += 1;
+        let kind = this.peek();
+        this.pos += 1;
+        if kind == 47 {
+            while this.peek() >= 0 && !(this.peek() in [10, 13]) { this.pos += 1; }
+        } else if kind == 42 {
+            loop {
+                let byte = this.peek();
+                if byte < 0 {
+                    this.pos = start;
+                    this.fail("块注释未结束 / unterminated block comment");
+                }
+                this.pos += 1;
+                if byte == 42 && this.peek() == 47 { this.pos += 1; break; }
+            }
+        } else {
+            this.pos = start;
+            this.fail("无效注释 / expected // or /* comment");
+        }
+        let comment = "" + this.data.extract(start, this.pos - start);
+        let multiline = comment.contains("\n") || comment.contains("\r");
+        comment.replace("\r\n", "\n");
+        comment.replace("\r", "\n");
+        comment.replace("\n", this.eol);
+        comments.push(comment);
+        if inline_only && (kind == 47 || multiline) { return comments; }
+    }
+}
+
+fn comment_lines(comments, pad, eol) {
+    let output = "";
+    for comment in comments {
+        if output != "" { output += eol; }
+        output += pad + comment;
+    }
+    output
+}
+
+fn comments_between(comments, pad, eol) {
+    let output = "";
+    for comment in comments {
+        output += comment;
+        // A line comment must end before the next key, colon or value is emitted.
+        output += if comment.starts_with("//") { eol + pad } else { " " };
+    }
+    output
+}
+
+fn comments_after(comments, pad, eol) {
+    let output = "";
+    let new_line = false;
+    for comment in comments {
+        output += if new_line { eol + pad } else { " " };
+        output += comment;
+        new_line = comment.starts_with("//");
+    }
+    output
+}
+
 fn expect(value) {
-    if this.peek() != value { this.fail("unexpected character or end of input"); }
+    if this.peek() != value {
+        let message = switch value {
+            34 => "对象键名必须使用双引号 / expected a double-quoted object key",
+            58 => "键名后缺少冒号 / expected ':' after object key",
+            44 => "元素之间缺少逗号 / expected ',' between items",
+            _ => "unexpected character or end of input"
+        };
+        this.fail(message);
+    }
     this.pos += 1;
 }
 
@@ -127,32 +225,58 @@ fn read_value(depth, pad) {
         let open_text = if object { "{" } else { "[" };
         let close_text = if object { "}" } else { "]" };
         this.pos += 1;
-        this.skip_space();
+        let leading = this.read_comments(false);
+        let child_pad = pad + this.indent;
         if this.peek() == close {
             this.pos += 1;
+            if leading.len > 0 {
+                return open_text + this.eol + comment_lines(leading, child_pad, this.eol)
+                    + this.eol + pad + close_text;
+            }
             return open_text + close_text;
         }
         let items = [];
         let keys = [];
         let members = #{};
-        let child_pad = pad + this.indent;
+        let footer = [];
         loop {
-            this.skip_space();
+            let key = [];
+            let body = "";
             if object {
-                let key = this.read_string();
+                key = this.read_string();
                 // Refuse duplicate decoded keys instead of silently discarding a member.
                 if members.contains(key[1]) { this.fail("duplicate object key: " + key[0]); }
-                this.skip_space();
+                let key_comments = this.read_comments(false);
                 this.expect(58);
+                let value_comments = this.read_comments(false);
                 let value = this.read_value(depth + 1, child_pad);
-                members[key[1]] = key[0] + ": " + value;
-                keys.push(key[1]);
+                body = key[0];
+                if key_comments.len > 0 { body += " " + comments_between(key_comments, child_pad, this.eol); }
+                body += ": " + comments_between(value_comments, child_pad, this.eol) + value;
             } else {
-                items.push(this.read_value(depth + 1, child_pad));
+                body = this.read_value(depth + 1, child_pad);
             }
-            this.skip_space();
-            if this.peek() == close { this.pos += 1; break; }
-            this.expect(44);
+            let tail = this.read_comments(true);
+            let after = this.read_comments(false);
+            let done = this.peek() == close;
+            let next = [];
+            if done {
+                footer = after;
+                after = [];
+            } else {
+                this.expect(44);
+                tail += this.read_comments(true);
+                next = this.read_comments(false);
+                // Accept a single trailing comma and omit it when formatting the container.
+                if this.peek() == close { footer = next; done = true; }
+            }
+            let item = #{ leading: leading, body: body, tail: tail, after: after };
+            if object {
+                members[key[1]] = item;
+                keys.push(key[1]);
+            } else { items.push(item); }
+            if done { this.pos += 1; break; }
+            leading = next;
         }
         if object {
             // Case-sensitive Unicode order: A-Z before a-z; escaped keys use their decoded value.
@@ -160,13 +284,18 @@ fn read_value(depth, pad) {
             for key in keys { items.push(members[key]); }
         }
         let output = open_text + this.eol;
-        let first_item = true;
-        for item in items {
-            if !first_item { output += "," + this.eol; }
-            first_item = false;
-            output += child_pad + item;
+        for i in 0..items.len {
+            let item = items[i];
+            if item.leading.len > 0 { output += comment_lines(item.leading, child_pad, this.eol) + this.eol; }
+            output += child_pad + item.body;
+            // Emit punctuation before line comments so sorting cannot hide a required comma.
+            if i + 1 < items.len { output += ","; }
+            output += comments_after(item.tail, child_pad, this.eol);
+            if item.after.len > 0 { output += this.eol + comment_lines(item.after, child_pad, this.eol); }
+            output += this.eol;
         }
-        return output + this.eol + pad + close_text;
+        if footer.len > 0 { output += comment_lines(footer, child_pad, this.eol) + this.eol; }
+        return output + pad + close_text;
     }
     let literal = switch first {
         116 => "true", 102 => "false", 110 => "null",
@@ -186,8 +315,13 @@ if type_of(width) != "i64" || width < 1 || width > 8 {
 let indent = "";
 for unused in 0..width { indent += " "; }
 let parser = #{ data: text.to_blob(), pos: 0, indent: indent, eol: line_ending };
-let result = parser.read_value(0, "");
-parser.skip_space();
+let header = parser.read_comments(false);
+let result = "";
+if header.len > 0 { result += comment_lines(header, "", line_ending) + line_ending; }
+result += parser.read_value(0, "");
+result += comments_after(parser.read_comments(true), "", line_ending);
+let footer = parser.read_comments(false);
+if footer.len > 0 { result += line_ending + comment_lines(footer, "", line_ending); }
 if parser.pos != parser.data.len { parser.fail("extra content after JSON value"); }
 // Preserve whether the selected text/document ended with a newline, using its current EOL style.
 if text.ends_with("\n") || text.ends_with("\r") { result += line_ending; }

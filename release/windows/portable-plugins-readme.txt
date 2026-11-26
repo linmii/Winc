@@ -10,6 +10,7 @@ Winc 自定义插件便携版（Windows x64）
 4. 可撤销整个处理操作；插件管理、导入和重新加载也位于命令面板。
 
 JSON 排序会递归按键名升序排列对象，区分大小写，保留数组元素顺序和数字精度，默认两空格缩进。
+支持 JSONC 的行注释、块注释和尾随逗号：保留注释并随字段排序，输出去掉尾随逗号；不支持完整 JSON5 或 JSONP。
 无效 JSON 或重复键会报错并保留原文；可在清单中将 indent 改为 1–8，随后重新加载插件。
 插件分别位于 plugins/winc.remove-duplicate-lines 和 plugins/winc.sort-json-keys。
 plugins 与 data 同级，脚本和清单可直接编辑。

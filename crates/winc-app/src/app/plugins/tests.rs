@@ -226,6 +226,23 @@ fn json_sort_command_handles_selections_atomically_and_supports_undo() {
 }
 
 #[test]
+fn jsonc_sort_preserves_field_comments_and_can_be_undone() {
+    let source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/plugins/sort-json-keys");
+    let original = "{\n// z docs\n\"z\":1, // z tail\n// a docs\n\"a\":2,\n}";
+    let expected = "{\n  // a docs\n  \"a\": 2,\n  // z docs\n  \"z\": 1 // z tail\n}";
+    let (mut app, _dir, _) = test_app(original);
+    app.import_plugin(source);
+    let action = Action::from_id("plugin:winc.sort-json-keys/sort-keys").unwrap();
+    assert!(app.run_action(action));
+    assert_eq!(text(&app), expected);
+    app.run(Command::Undo);
+    assert_eq!(text(&app), original);
+    app.run(Command::Redo);
+    assert_eq!(text(&app), expected);
+}
+
+#[test]
 fn shortcuts_persist_while_plugins_are_disabled_or_missing() {
     let (mut app, dir, action) = test_app("a\na\n");
     let id = action.id();
