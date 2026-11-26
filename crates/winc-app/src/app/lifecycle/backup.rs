@@ -216,7 +216,7 @@ pub(crate) fn restore_tabs(
 ///
 /// 标签按原来的顺序重新打开，激活当时的标签，文件树展开到该文件所在的层级；现场中没有记录
 /// 的备份（进程中止前来不及记录现场）也会恢复，排在已记录的标签之后。现场中已不存在的文件
-/// 跳过，除非它还有未保存的内容。
+/// 跳过，除非它还有未保存的内容。没有现场时保留调用方已打开的当前标签。
 pub(crate) fn restore_prepared(
     editor: &mut Editor,
     session: Option<&Session>,
@@ -231,7 +231,12 @@ pub(crate) fn restore_prepared(
         lock,
         ..Default::default()
     };
-    let mut active = None;
+    // 右键菜单/命令行先打开目标，再恢复备份；恢复草稿会切换标签，不能抢走显式目标的焦点。
+    // 用文档标识保存选择，避免恢复过程中插入标签使下标失效；有现场时仍以现场为准。
+    let mut active = editor
+        .active()
+        .filter(|_| session.is_none())
+        .map(|doc| doc.id);
     // 先恢复书签和折叠的块，之后打开各文件时由文件自行取用。
     if let Some(session) = session {
         editor.bookmarks = session

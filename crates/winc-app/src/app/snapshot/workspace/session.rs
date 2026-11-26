@@ -309,6 +309,91 @@ fn restoring_without_a_session_keeps_the_active_tab() {
 }
 
 #[test]
+fn files_requested_at_launch_stay_active_while_unsaved_tabs_are_restored() {
+    for with_folder in [false, true] {
+        for target_dirty in [false, true] {
+            let name = format!("launch-backups-{with_folder}-{target_dirty}");
+            let dir = sample_folder(&name);
+            let root = backup_root(&name);
+            let first = dir.join("右键打开 file.txt");
+            let second = dir.join("second.txt");
+            std::fs::write(&first, "requested\n").unwrap();
+            std::fs::write(&second, "second\n").unwrap();
+            let mut editor = Editor::default();
+            if with_folder {
+                editor.open_folder(&dir).unwrap();
+            }
+            editor.open(&first);
+            let mut previous = App::new(editor, None, Bench::from_env(), Config::default());
+            previous.backup.root = Some(root.clone());
+            if target_dirty {
+                previous.run(Command::Insert("未保存的修改 ".into()));
+            }
+            previous.new_file();
+            previous.run(Command::Insert("临时草稿".into()));
+            previous.request_quit();
+            assert!(previous.closing.quit_requested && previous.closing.prompt.is_none());
+            let backup_count = 1 + usize::from(target_dirty);
+            let backups = winc_editor::backup::Backups::new(&root, previous.editor.root());
+            assert_eq!(backups.read_all().len(), backup_count);
+            drop(previous);
+
+            // 与冷启动相同：先打开命令行/资源管理器传入的文件，再恢复热退出备份。
+            let mut targets = Vec::new();
+            if with_folder {
+                targets.push(dir.clone().into_os_string());
+            }
+            targets.extend([
+                first.clone().into_os_string(),
+                second.clone().into_os_string(),
+            ]);
+            let args = crate::cli::parse(targets).unwrap();
+            let mut editor = Editor::default();
+            assert!(crate::open_targets(&mut editor, &args).problems.is_empty());
+            let requested = editor.active().unwrap().id;
+            let restored = crate::app::restore_at_launch(&mut editor, None, Some(&root));
+            assert_eq!(editor.active().unwrap().id, requested);
+            assert_eq!(editor.active().unwrap().name(), "右键打开 file.txt");
+            assert_eq!(editor.active().unwrap().is_dirty(), target_dirty);
+            assert_eq!(editor.documents.len(), 3, "恢复草稿，不重复打开请求的文件");
+            let draft = editor
+                .documents
+                .iter()
+                .find(|doc| doc.path.is_none())
+                .unwrap();
+            assert!(draft.is_dirty());
+            assert_eq!(draft.text().rope().unwrap().to_string(), "临时草稿");
+            let expected = if target_dirty {
+                "未保存的修改 requested\n"
+            } else {
+                "requested\n"
+            };
+            assert_eq!(
+                editor.active().unwrap().text().rope().unwrap().to_string(),
+                expected
+            );
+            assert_eq!(std::fs::read_to_string(&first).unwrap(), "requested\n");
+            drop(restored);
+
+            // 无显式文件目标时，仍正常恢复未保存的内容。
+            let mut editor = Editor::default();
+            if with_folder {
+                editor.open_folder(&dir).unwrap();
+            }
+            let restored = crate::app::restore_at_launch(&mut editor, None, Some(&root));
+            assert_eq!(editor.documents.len(), backup_count);
+            assert_eq!(
+                editor.active().unwrap().text().rope().unwrap().to_string(),
+                "临时草稿"
+            );
+            drop(restored);
+            let _ = std::fs::remove_dir_all(&dir);
+            let _ = std::fs::remove_dir_all(&root);
+        }
+    }
+}
+
+#[test]
 fn a_pane_that_takes_over_the_front_keeps_its_own_active_tab() {
     let dir = sample_folder("session-pane-gone");
     let mut tabs = Vec::new();
