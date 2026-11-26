@@ -980,6 +980,7 @@ impl Winc {
         app.state = (template.state_path.as_deref())
             .map(State::load_from)
             .unwrap_or_default();
+        app.restore_search_state();
         app.git.commit.set_flat(!app.state.commit_tree);
         let sort = crate::app::CommitSort::from_key(&app.state.commit_sort);
         app.git.commit.set_sort(sort);

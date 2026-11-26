@@ -10,6 +10,20 @@ fn search(app: &mut App, pattern: &str) {
 }
 
 #[test]
+fn vim_search_does_not_persist_its_implicit_regex_mode() {
+    let (mut app, dir) = vim_app("vim-regex-preference", "one1 two22\n");
+    let state_path = dir.join("state.json");
+    app.store.state_path = Some(state_path.clone());
+    search(&mut app, r"\d\+");
+    assert!(app.bars.search.regex);
+    assert!(!app.state.search_regex);
+    app.prepare_exit();
+    assert!(!State::load_from(&state_path).search_regex);
+    drop(app);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn histories_are_read_at_start_and_written_on_exit() {
     let dir = sample_folder("vim-history");
     let path = dir.join("vim.txt");
