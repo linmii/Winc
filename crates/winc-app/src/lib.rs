@@ -280,6 +280,7 @@ pub fn run() {
     app.editor.diff_unified = app.config.diff_inline == Some(true);
     app.editor.diff_collapse = app.config.diff_collapse_unchanged != Some(false);
     app.state = state;
+    app.restore_search_state();
     app.restore_text_places();
     app.restore_panel_width();
     app.load_at_launch(opened.jumps);

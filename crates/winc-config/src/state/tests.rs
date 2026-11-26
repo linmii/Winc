@@ -180,6 +180,7 @@ fn sample() -> State {
         log_files_tree: Some(false),
         diff_files_tree: Some(true),
         search_tree: true,
+        search_regex: true,
         log_columns: Some(vec!["date".into(), "hash".into()]),
         commit_messages: vec!["修复登录\n\n说明".into(), "first".into()],
         commit_check_todo: true,
@@ -237,6 +238,23 @@ fn round_trips_through_json() {
     let state = sample();
     assert_eq!(State::parse(&state.to_json()), state);
     assert_eq!(State::parse(&State::default().to_json()), State::default());
+}
+
+#[test]
+fn search_regex_defaults_to_off_and_round_trips_both_choices() {
+    for text in [
+        "{}",
+        r#"{"searchRegex": null}"#,
+        r#"{"searchRegex": "true"}"#,
+        r#"{"searchRegex": 1}"#,
+    ] {
+        assert!(!State::parse(text).search_regex);
+    }
+    for regex in [true, false] {
+        let state = State::parse(&format!(r#"{{"searchRegex": {regex}}}"#));
+        assert_eq!(state.search_regex, regex);
+        assert_eq!(State::parse(&state.to_json()).search_regex, regex);
+    }
 }
 
 #[test]

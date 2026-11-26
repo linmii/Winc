@@ -17,6 +17,11 @@ pub(in crate::app) fn ref_name_field() -> TextField {
 }
 
 impl App {
+    /// 启动和新建窗口时恢复查找/替换的正则开关；运行中不覆盖当前查询的选项。
+    pub(crate) fn restore_search_state(&mut self) {
+        self.bars.search.regex = self.state.search_regex;
+    }
+
     /// 打开查找条。
     ///
     /// `replace` 为 `true` 时同时展开替换；此时如果已有查找内容，焦点直接放到替换输入框。
@@ -297,7 +302,12 @@ impl App {
                 self.bars.search.case_sensitive = !self.bars.search.case_sensitive
             }
             SearchButton::Word => self.bars.search.whole_word = !self.bars.search.whole_word,
-            SearchButton::Regex => self.bars.search.regex = !self.bars.search.regex,
+            SearchButton::Regex => {
+                let regex = !self.bars.search.regex;
+                self.bars.search.regex = regex;
+                // 只保存按钮/快捷键的明确选择，Vim 查找临时使用正则时不改用户偏好。
+                self.update_state(move |state| state.search_regex = regex);
+            }
             SearchButton::Prev => self.find_next(true),
             SearchButton::Next => self.find_next(false),
             SearchButton::Filter => self.toggle_line_filter(),

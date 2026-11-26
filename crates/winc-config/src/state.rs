@@ -90,6 +90,8 @@ pub struct State {
     ///
     /// `false`（默认）时平铺，每个文件一行。所有窗口共用，下次启动沿用。
     pub search_tree: bool,
+    /// 文件内查找/替换的正则开关；只记用户的选择，启动和新建窗口时恢复。
+    pub search_regex: bool,
     /// Git 日志列表右边显示的列（`author`、`date`、`hash`）；`None`（没有选过）时显示作者和
     /// 日期。所有窗口共用，下次启动沿用。
     pub log_columns: Option<Vec<String>>,
@@ -620,6 +622,7 @@ impl State {
         state.log_files_tree = root.get("logFilesTree").and_then(Json::as_bool);
         state.diff_files_tree = root.get("diffFilesTree").and_then(Json::as_bool);
         state.search_tree = (root.get("searchTree").and_then(Json::as_bool)).unwrap_or(false);
+        state.search_regex = (root.get("searchRegex").and_then(Json::as_bool)).unwrap_or(false);
         state.log_columns = (root.get("logColumns").and_then(Json::as_array)).map(|columns| {
             let names = columns.iter().filter_map(Json::as_str);
             names.map(str::to_owned).collect()
@@ -789,6 +792,9 @@ impl State {
         }
         if self.search_tree {
             fields.push(("searchTree", Json::Bool(true)));
+        }
+        if self.search_regex {
+            fields.push(("searchRegex", Json::Bool(true)));
         }
         if let Some(columns) = &self.log_columns {
             let names = columns.iter().map(|c| Json::String(c.clone()));

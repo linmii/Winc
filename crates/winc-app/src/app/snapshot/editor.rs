@@ -5,6 +5,7 @@ use super::*;
 mod control_keys;
 pub(super) mod cursors;
 pub(super) mod editing;
+mod find;
 pub(super) mod folding;
 mod hex;
 mod links;
