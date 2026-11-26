@@ -293,6 +293,8 @@ impl App {
         if let Some(index) = opened.and_then(|id| self.editor.index_of(id)) {
             self.editor.active = Some(index);
         }
+        // 恢复可能将当前标签移到末尾，即使文档没变也要重新滚入可见范围。
+        self.tabs.revealed = None;
         self.adopt_restored(restored);
         if session
             .as_ref()

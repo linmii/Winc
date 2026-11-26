@@ -237,6 +237,8 @@ pub(crate) fn restore_prepared(
         .active()
         .filter(|_| session.is_none())
         .map(|doc| doc.id);
+    // 记住恢复之前打开的标签：冷启动参数和后台恢复期间打开的文件都排在恢复标签之后。
+    let requested: Vec<_> = editor.tabs().iter().map(|doc| doc.id).collect();
     // 先恢复书签和折叠的块，之后打开各文件时由文件自行取用。
     if let Some(session) = session {
         editor.bookmarks = session
@@ -298,6 +300,14 @@ pub(crate) fn restore_prepared(
 
     if let Some(panes) = session.and_then(|s| s.panes.as_ref()) {
         restore_panes(editor, panes, &opened);
+    }
+    // 按原顺序移到前台窗格最右侧；move_document 保持文档与焦点，不影响其他窗格。
+    for id in requested {
+        if let Some(index) = editor.index_of(id)
+            && let Some(last) = editor.tab_count().checked_sub(1)
+        {
+            editor.move_document(index, last);
+        }
     }
     // 当时的当前标签不在前台窗格里时沿用已有的当前标签，都没有时改为最后一个标签。
     let tabs = editor.tab_count();

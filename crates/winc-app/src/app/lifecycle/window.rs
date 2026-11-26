@@ -115,7 +115,7 @@ impl App {
     }
 
     /// 打开 `targets` 里的文件（目录跳过：已经是本窗口的目录），`文件:行:列` 跳到该位置，再把
-    /// 窗口切到前台。
+    /// 窗口切到前台。外部打开的文件放到当前窗格最右侧，已有标签复用并移到末尾。
     pub(crate) fn open_files(&mut self, targets: &[crate::cli::Target]) {
         for target in targets {
             if self.is_folder(&target.path) {
@@ -127,6 +127,16 @@ impl App {
                 continue;
             }
             self.open_path(&target.path);
+            // 文件管理器/命令行打开已有文件时也放到最右侧，不重复创建标签。
+            if let Some(index) = self.editor.active
+                && let Some(last) = self.editor.tab_count().checked_sub(1)
+                && index != last
+            {
+                self.editor.move_document(index, last);
+                // 当前文档可能没变，但位置变了：下一帧要把末尾标签滚入可见范围。
+                self.tabs.revealed = None;
+                self.relayout();
+            }
             self.note_opened_file(&target.path);
             if let Some(line) = target.line {
                 self.jump_to(line, target.col.unwrap_or(0), 0);

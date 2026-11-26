@@ -254,6 +254,79 @@ fn dropped_on_the_dock_icon_open_in_the_window_that_has_them_or_the_current_one(
     let _ = std::fs::remove_dir_all(&other);
 }
 
+#[test]
+fn externally_opened_files_go_to_the_rightmost_tab_without_losing_edits() {
+    let dir = sample_folder("windows-external-tab-order");
+    let first = dir.join("a.txt");
+    let second = dir.join("short.rs");
+    let third = dir.join("Cargo.toml");
+    let mut app = app_with(&first, false);
+    app.run(Command::Insert("未保存 ".into()));
+    let id = app.editor.active().unwrap().id;
+    let contents = app
+        .editor
+        .active()
+        .unwrap()
+        .text()
+        .rope()
+        .unwrap()
+        .to_string();
+    app.open_path(&second);
+    let target = |path: &Path| crate::cli::Target {
+        path: path.to_path_buf(),
+        line: None,
+        col: None,
+    };
+    let names = |app: &App| {
+        app.editor
+            .tabs()
+            .iter()
+            .map(|doc| doc.name().into_owned())
+            .collect::<Vec<_>>()
+    };
+
+    // 新文件追加到最右侧，原本的当前标签可以在任意位置。
+    app.activate_tab(0);
+    app.open_files(&[target(&third)]);
+    assert_eq!(names(&app), ["a.txt", "short.rs", "Cargo.toml"]);
+    assert_eq!(app.editor.active, Some(2));
+
+    // 已打开的文件移到末尾；沿用原文档和未保存的内容，不重新读盘。
+    app.open_files(&[target(&first)]);
+    assert_eq!(names(&app), ["short.rs", "Cargo.toml", "a.txt"]);
+    assert_eq!(app.editor.active, Some(2));
+    let doc = app.editor.active().unwrap();
+    assert_eq!(doc.id, id);
+    assert!(doc.is_dirty());
+    assert_eq!(doc.text().rope().unwrap().to_string(), contents);
+
+    // 多选文件按传入顺序放到末尾，重复打开不会增加标签。
+    app.open_files(&[target(&second), target(&third)]);
+    assert_eq!(names(&app), ["a.txt", "short.rs", "Cargo.toml"]);
+    assert_eq!(app.editor.active, Some(2));
+    app.open_files(&[target(&third)]);
+    assert_eq!(names(&app), ["a.txt", "short.rs", "Cargo.toml"]);
+
+    // 标签栏溢出时，重复打开当前文件也会随标签的新位置滚到右端。
+    for i in 0..12 {
+        let path = dir.join(format!("long-external-tab-name-{i}.txt"));
+        std::fs::write(&path, "text\n").unwrap();
+        app.open_path(&path);
+    }
+    app.activate_tab(0);
+    paint(&mut app);
+    assert_eq!(app.tabs.revealed, Some(id));
+    assert!(app.tabs.content > app.tabs.view.w);
+    let scroll = app.tabs.scroll;
+    app.open_files(&[target(&first)]);
+    paint(&mut app);
+    assert_eq!(app.editor.active, Some(app.editor.tab_count() - 1));
+    assert_eq!(app.editor.active().unwrap().id, id);
+    assert!(app.tabs.scroll > scroll);
+    drop(app);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// 本机的文件不交给远端主机的窗口：交给最近成为当前窗口的本机窗口，没有本机窗口时新建窗口。
 #[cfg(unix)]
 #[test]
