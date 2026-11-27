@@ -1,6 +1,6 @@
 name: Windows portable (custom)
 
-# Build branches with plugins; dev and main stay exact mirrors of upstream.
+# Build custom branches; dev and main stay exact mirrors of upstream.
 on:
   push:
     branches: [codex/dev, codex/main]
@@ -48,12 +48,12 @@ jobs:
         run: ./release/windows/conpty.ps1 -Destination "target/$env:TARGET/release"
       - name: Package and verify portable ZIP
         run: |
-          ./release/windows/package.ps1 -Phase portable -Target $env:TARGET -IncludePlugins
+          ./release/windows/package.ps1 -Phase portable -Target $env:TARGET
           $version = (Get-Content VERSION -Raw).Trim()
           $zip = "target/$env:TARGET/release/bundle/portable/Winc-$version-windows-x64-portable.zip"
-          ./release/windows/verify-portable.ps1 -Archive $zip -IncludePlugins
+          ./release/windows/verify-portable.ps1 -Archive $zip
           New-Item -ItemType Directory -Force release/out | Out-Null
-          $name = "Winc-$version-windows-x64-portable-plugins.zip"
+          $name = "Winc-$version-windows-x64-portable.zip"
           Copy-Item -LiteralPath $zip -Destination "release/out/$name"
           $hash = (Get-FileHash "release/out/$name" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $name" | Set-Content -Encoding utf8NoBOM release/out/SHA256SUMS

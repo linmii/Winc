@@ -59,5 +59,6 @@ rtk git push origin codex/main
 ## Windows 便携版
 
 推送 `codex/dev` 或 `codex/main` 会触发
-**Windows portable (custom)**，生成带插件的便携版 Actions 构建产物。
+**Windows portable (custom)**，生成保留插件运行时的便携版 Actions 构建产物。
+插件包由 [Winc-plugin](https://github.com/linmii/Winc-plugin) 独立发布，下载后按需导入。
 `dev`、`main` 保留上游的原始工作流。打包和下载方法见 [release/README.md](release/README.md)。

@@ -16,6 +16,22 @@ impl Temp {
         std::fs::create_dir(&path).unwrap();
         Self(path)
     }
+
+    fn package(&self, script: &str) -> PathBuf {
+        // Generate a minimal host fixture instead of depending on external plugin sources.
+        let source = self.0.join("source");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(
+            source.join("plugin.json"),
+            r#"{
+                "id":"test.transform", "name":"Test", "version":"1", "api_version":1,
+                "commands":[{"id":"run", "title":"测试转换 / Test Transform", "script":"main.rhai"}]
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(source.join("main.rhai"), script).unwrap();
+        source
+    }
 }
 impl Drop for Temp {
     fn drop(&mut self) {
@@ -24,10 +40,14 @@ impl Drop for Temp {
 }
 
 fn test_app(text: &str) -> (App, Temp, Action) {
+    test_app_with_script(text, "text.to_upper()")
+}
+
+fn test_app_with_script(text: &str, script: &str) -> (App, Temp, Action) {
     let temp = Temp::new();
-    let source =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/plugins/remove-duplicate-lines");
-    winc_plugin::install(&temp.0, &source).unwrap();
+    let source = temp.package(script);
+    let root = temp.0.join("installed");
+    winc_plugin::install(&root, &source).unwrap();
     let mut editor = Editor::default();
     editor.new_untitled();
     editor
@@ -44,10 +64,10 @@ fn test_app(text: &str) -> (App, Temp, Action) {
             winc_core::EditKind::Other,
         ));
     let mut app = App::new(editor, None, Bench::from_env(), Config::default());
-    app.plugins.root = Some(temp.0.clone());
+    app.plugins.root = Some(root);
     keymap::plugins::install(Vec::new());
     app.reload_plugins();
-    let action = Action::from_id("plugin:winc.remove-duplicate-lines/remove-duplicates").unwrap();
+    let action = Action::from_id("plugin:test.transform/run").unwrap();
     (app, temp, action)
 }
 
@@ -61,10 +81,9 @@ fn text(app: &App) -> String {
 
 #[test]
 fn imports_and_reloads_plugins_in_the_portable_or_user_directory() {
-    let source =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/plugins/remove-duplicate-lines");
     for portable in [true, false] {
         let temp = Temp::new();
+        let source = temp.package("text.to_upper()");
         // 配置目录恰好叫 data 不代表便携版，必须使用实际的便携模式判断结果。
         let data = temp.0.join("data");
         std::fs::create_dir(&data).unwrap();
@@ -81,35 +100,26 @@ fn imports_and_reloads_plugins_in_the_portable_or_user_directory() {
         app.plugins.root = Some(root);
         keymap::plugins::install(Vec::new());
         app.import_plugin(source.clone());
-        assert!(
-            expected
-                .join("winc.remove-duplicate-lines/plugin.json")
-                .is_file()
-        );
+        assert!(expected.join("test.transform/plugin.json").is_file());
         assert!(!unused.exists());
 
         // 清空命令后重新加载，确认发现、禁用和卸载都使用同一个目录。
         keymap::plugins::install(Vec::new());
         app.reload_plugins();
-        let action =
-            Action::from_id("plugin:winc.remove-duplicate-lines/remove-duplicates").unwrap();
+        let action = Action::from_id("plugin:test.transform/run").unwrap();
         assert!(app.action_available(action));
         app.manage_plugins();
         app.run_menu_command(MenuCommand::PluginEnable(0, false));
-        assert!(
-            expected
-                .join("winc.remove-duplicate-lines/.disabled")
-                .is_file()
-        );
+        assert!(expected.join("test.transform/.disabled").is_file());
         app.manage_plugins();
         app.run_menu_command(MenuCommand::PluginRemove(0));
-        assert!(!expected.join("winc.remove-duplicate-lines").exists());
+        assert!(!expected.join("test.transform").exists());
     }
 }
 
 #[test]
 fn plugin_command_transforms_and_undoes_the_document() {
-    let (mut app, _dir, action) = test_app("甲\n乙\n甲\n");
+    let (mut app, _dir, action) = test_app("甲a\n乙b\n");
     // 上游将静态命令列表拆到单独模块，管理命令和动态脚本都必须继续注册。
     for management in [
         Action::ImportPluginFolder,
@@ -122,19 +132,19 @@ fn plugin_command_transforms_and_undoes_the_document() {
     }
     assert!(palette().contains(&action));
     assert!(app.run_action(action));
-    assert_eq!(text(&app), "甲\n乙\n");
+    assert_eq!(text(&app), "甲A\n乙B\n");
     app.run(Command::Undo);
-    assert_eq!(text(&app), "甲\n乙\n甲\n");
+    assert_eq!(text(&app), "甲a\n乙b\n");
     app.run(Command::Redo);
-    assert_eq!(text(&app), "甲\n乙\n");
+    assert_eq!(text(&app), "甲A\n乙B\n");
 }
 
 #[test]
-fn empty_lines_collapse_to_one_editor_line_and_can_be_undone() {
+fn empty_plugin_output_leaves_one_editor_line_and_can_be_undone() {
     for ending in ["\n", "\r\n", "\r"] {
         for select_all in [false, true] {
             let original = ending.repeat(3);
-            let (mut app, _dir, action) = test_app(&original);
+            let (mut app, _dir, action) = test_app_with_script(&original, r#""""#);
             if select_all {
                 app.editor
                     .active_mut()
@@ -165,31 +175,30 @@ fn only_selected_text_changes_and_multiselections_undo_as_one_step() {
         .set_selections(vec![Selection::new(2, 6), Selection::new(8, 12)], 0);
     let selections = app.editor.active().unwrap().selections();
     app.run_action(action);
-    assert_eq!(text(&app), "前\na\n中\nb\n后");
+    assert_eq!(text(&app), "前\nA\nA\n中\nB\nB\n后");
     app.run(Command::Undo);
     assert_eq!(text(&app), original);
     assert_eq!(app.editor.active().unwrap().selections(), selections);
 }
 
 #[test]
-fn json_sort_command_handles_selections_atomically_and_supports_undo() {
-    let source =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/plugins/sort-json-keys");
-    let left = r#"{"b":2,"a":1}"#;
-    let right = r#"{"d":4,"c":3}"#;
-    let sorted_left = "{\n  \"a\": 1,\n  \"b\": 2\n}";
-    let sorted_right = "{\n  \"c\": 3,\n  \"d\": 4\n}";
+fn plugin_command_handles_selections_atomically_and_supports_undo() {
+    let left = "abc";
+    let right = "def";
+    let transformed_left = "ABC";
+    let transformed_right = "DEF";
     for selected in [false, true] {
         for valid in [false, true] {
-            let right = if valid { right } else { r#"{"c":}"# };
+            let right = if valid { right } else { "invalid" };
             let original = if selected {
                 format!("前\n{left}\n中\n{right}\n后")
             } else {
                 right.to_string()
             };
-            let (mut app, _dir, _) = test_app(&original);
-            app.import_plugin(source.clone());
-            let action = Action::from_id("plugin:winc.sort-json-keys/sort-keys").unwrap();
+            let (mut app, _dir, action) = test_app_with_script(
+                &original,
+                r#"if text == "invalid" { throw "rejected input"; } text.to_upper()"#,
+            );
             assert!(palette().contains(&action));
             if selected {
                 let left_end = 2 + left.chars().count();
@@ -206,9 +215,9 @@ fn json_sort_command_handles_selections_atomically_and_supports_undo() {
             assert!(app.run_action(action));
             if valid {
                 let expected = if selected {
-                    format!("前\n{sorted_left}\n中\n{sorted_right}\n后")
+                    format!("前\n{transformed_left}\n中\n{transformed_right}\n后")
                 } else {
-                    sorted_right.to_string()
+                    transformed_right.to_string()
                 };
                 assert_eq!(text(&app), expected);
                 app.run(Command::Undo);
@@ -217,29 +226,12 @@ fn json_sort_command_handles_selections_atomically_and_supports_undo() {
                 app.run(Command::Redo);
                 assert_eq!(text(&app), expected);
             } else {
-                // A malformed second selection must not apply the successful first result.
+                // A failure in the second selection must not apply the successful first result.
                 assert_eq!(text(&app), original);
                 assert_eq!(app.editor.active().unwrap().selections(), selections);
             }
         }
     }
-}
-
-#[test]
-fn jsonc_sort_preserves_field_comments_and_can_be_undone() {
-    let source =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/plugins/sort-json-keys");
-    let original = "{\n// z docs\n\"z\":1, // z tail\n// a docs\n\"a\":2,\n}";
-    let expected = "{\n  // a docs\n  \"a\": 2,\n  // z docs\n  \"z\": 1 // z tail\n}";
-    let (mut app, _dir, _) = test_app(original);
-    app.import_plugin(source);
-    let action = Action::from_id("plugin:winc.sort-json-keys/sort-keys").unwrap();
-    assert!(app.run_action(action));
-    assert_eq!(text(&app), expected);
-    app.run(Command::Undo);
-    assert_eq!(text(&app), original);
-    app.run(Command::Redo);
-    assert_eq!(text(&app), expected);
 }
 
 #[test]
@@ -256,8 +248,8 @@ fn shortcuts_persist_while_plugins_are_disabled_or_missing() {
         Lookup::Run(vec![action])
     );
     assert!(app.on_shortcut(key));
-    assert_eq!(text(&app), "a\n");
-    winc_plugin::set_enabled(&dir.0, "winc.remove-duplicate-lines", false).unwrap();
+    assert_eq!(text(&app), "A\nA\n");
+    winc_plugin::set_enabled(&dir.0.join("installed"), "test.transform", false).unwrap();
     app.reload_plugins();
     assert!(!app.action_available(action));
     assert_eq!(
@@ -283,7 +275,7 @@ fn shortcuts_persist_while_plugins_are_disabled_or_missing() {
         Custom::from_config(&unknown).0.to_config(Os::CURRENT),
         unknown
     );
-    winc_plugin::set_enabled(&dir.0, "winc.remove-duplicate-lines", true).unwrap();
+    winc_plugin::set_enabled(&dir.0.join("installed"), "test.transform", true).unwrap();
     app.reload_plugins();
     assert_eq!(Action::from_id(&id), Some(action));
     assert_eq!(

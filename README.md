@@ -94,8 +94,8 @@ folder, they are kept in the user profile.
 
 ## Command Line
 
-This fork supports local Rhai/Grain text transformation plugins, including a remove-duplicate-lines
-example. See the [plugin guide and API](PLUGINS.md) (Chinese).
+This fork supports local Rhai/Grain text transformation plugins. Install separately packaged plugins
+from [Winc-plugin](https://github.com/linmii/Winc-plugin). See the [plugin guide and API](PLUGINS.md) (Chinese).
 
 ```bash
 winc .                  # open the current folder

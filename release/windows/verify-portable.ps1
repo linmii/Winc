@@ -1,6 +1,5 @@
 param(
-    [Parameter(Mandatory)][string]$Archive,
-    [switch]$IncludePlugins
+    [Parameter(Mandatory)][string]$Archive
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -16,23 +15,7 @@ try {
     $required = @('winc.exe', 'winc-pty.exe', 'conpty.dll', 'OpenConsole.exe', 'winc-watch',
         'winc-server-Linux-x86_64', 'winc-server-Linux-aarch64', 'bin/winc', 'bin/winc.cmd',
         'data/README.txt', 'LICENSE', 'NOTICE', 'winc.ico')
-    if ($IncludePlugins) {
-        $required += @('PLUGINS.md', 'README-PORTABLE.txt',
-            'plugins/winc.remove-duplicate-lines/plugin.json',
-            'plugins/winc.remove-duplicate-lines/main.rhai',
-            'plugins/winc.remove-empty-line/plugin.json',
-            'plugins/winc.remove-empty-line/main.rhai',
-            'plugins/winc.sort-json-keys/plugin.json',
-            'plugins/winc.sort-json-keys/main.rhai',
-            'plugins/winc.chinese-conversion/plugin.json',
-            'plugins/winc.chinese-conversion/main.rhai',
-            'plugins/winc.chinese-conversion/dictionaries/STCharacters.txt',
-            'plugins/winc.chinese-conversion/dictionaries/STPhrases.txt',
-            'plugins/winc.chinese-conversion/dictionaries/TSCharacters.txt',
-            'plugins/winc.chinese-conversion/dictionaries/TSPhrases.txt',
-            'plugins/winc.chinese-conversion/dictionaries/LICENSE')
-    }
-    # Exact membership also excludes installer markers, user state and compiler output.
+    # Exact membership excludes bundled plugins, installer markers, user state and compiler output.
     foreach ($name in $required) {
         if (-not $files.ContainsKey($name) -or $files[$name].Length -eq 0) { throw "missing or empty: $name" }
     }
@@ -66,16 +49,6 @@ try {
     }
     if (([Text.Encoding]::UTF8.GetString((Read-EntryBytes 'bin/winc'))).Contains("`r")) {
         throw 'WSL launcher must use LF line endings'
-    }
-    if ($IncludePlugins) {
-        foreach ($name in @('remove-duplicate-lines', 'remove-empty-line', 'sort-json-keys', 'chinese-conversion')) {
-            $manifest = [Text.Encoding]::UTF8.GetString((Read-EntryBytes "plugins/winc.$name/plugin.json")) | ConvertFrom-Json
-            if ($manifest.id -ne "winc.$name" -or $manifest.api_version -ne 1 -or
-                $manifest.commands[0].script -ne 'main.rhai') { throw "invalid bundled plugin manifest: $name" }
-            foreach ($resource in $manifest.resources) {
-                if (-not $files.ContainsKey("plugins/winc.$name/$resource")) { throw "missing plugin resource: $resource" }
-            }
-        }
     }
     Write-Host "Verified $($files.Count) portable files, Windows x64 and both Linux architectures."
 } finally {

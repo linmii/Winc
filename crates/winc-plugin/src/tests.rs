@@ -4,8 +4,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-mod json_sort;
-
 struct Temp(PathBuf);
 impl Temp {
     fn new() -> Self {
@@ -48,52 +46,27 @@ fn input(text: &str, ending: &str, command: &str) -> Input {
 }
 
 #[test]
-fn example_deduplicates_unicode_and_preserves_line_endings_and_empty_lines() {
+fn scripts_receive_unicode_text_line_endings_commands_and_options() {
     let dir = Temp::new();
-    let source =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/plugins/remove-duplicate-lines");
-    install(&dir.0, &source).unwrap();
-    let catalog = load(&dir.0);
+    // Keep host API coverage independent of the separately maintained plugin collection.
+    let source = dir.package("options.prefix + command + line_ending + text");
+    let root = dir.0.join("installed");
+    install(&root, &source).unwrap();
+    let mut catalog = load(&root);
     assert!(catalog.errors.is_empty(), "{:?}", catalog.errors);
-    let p = &catalog.plugins[0];
-    for (before, after, ending) in [
-        ("甲\n乙\n甲\n", "甲\n乙\n", "\n"),
-        ("a\r\nb\r\na", "a\r\nb", "\r\n"),
-        ("a\rb\ra\r", "a\rb\r", "\r"),
-        ("\n\na\na\n", "\na\n", "\n"),
-        ("", "", "\n"),
-        // 只有空行时返回空文本，否则一个末尾换行仍会显示成两行。
-        ("\n", "", "\n"),
-        ("\n\n\n", "", "\n"),
-        ("\r\n\r\n\r\n", "", "\r\n"),
-        ("\r\r\r", "", "\r"),
-        ("\r\n\n\r", "", "\r\n"),
-        // 普通文本和含空格的行继续保留原来的末尾换行语义。
-        ("a\n\n\n", "a\n\n", "\n"),
-        (" \n \n", " \n", "\n"),
-        ("a\nA\n a ", "a\nA\n a ", "\n"),
-    ] {
+    let plugin = &mut catalog.plugins[0];
+    plugin.manifest.commands[0]
+        .options
+        .insert("prefix".into(), "测试:".into());
+    for ending in ["\n", "\r\n", "\r"] {
+        let text = format!("甲{ending}乙😀{ending}");
         assert_eq!(
-            p.run(input(before, ending, "remove-duplicates"), Arc::default())
+            plugin
+                .run(input(&text, ending, "run"), Arc::default())
                 .unwrap(),
-            after
+            format!("测试:run{ending}{text}")
         );
     }
-    let mut p = p.clone();
-    p.manifest.commands[0]
-        .options
-        .insert("ignore_case".into(), true.into());
-    p.manifest.commands[0]
-        .options
-        .insert("trim_whitespace".into(), true.into());
-    assert_eq!(
-        p.run(
-            input(" A \na\nB\nb", "\n", "remove-duplicates"),
-            Arc::default()
-        )
-        .unwrap(),
-        " A \nB"
-    );
 }
 
 #[test]

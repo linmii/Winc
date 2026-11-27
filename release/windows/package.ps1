@@ -1,7 +1,6 @@
 param(
     [Parameter(Mandatory)][ValidateSet('installers', 'portable')][string]$Phase,
-    [string]$Target = 'x86_64-pc-windows-msvc',
-    [switch]$IncludePlugins
+    [string]$Target = 'x86_64-pc-windows-msvc'
 )
 $ErrorActionPreference = 'Stop'
 if ($Target -ne 'x86_64-pc-windows-msvc') { throw "unsupported Windows target: $Target" }
@@ -42,26 +41,9 @@ if ($Phase -eq 'portable') {
     # inside also keeps Compress-Archive from dropping the folder as empty.
     New-Item -ItemType Directory -Force "$stage/data" | Out-Null
     Copy-Item "$PSScriptRoot/portable-data-readme.txt" "$stage/data/README.txt" -Force
-    $extras = @()
-    if ($IncludePlugins) {
-        # Plugins sit beside data so packages and profile data can be managed separately.
-        foreach ($name in @('remove-duplicate-lines', 'remove-empty-line', 'sort-json-keys', 'chinese-conversion')) {
-            $plugin = "$stage/plugins/winc.$name"
-            New-Item -ItemType Directory -Force $plugin | Out-Null
-            Copy-Item "$root/examples/plugins/$name/plugin.json", "$root/examples/plugins/$name/main.rhai" $plugin -Force
-            $manifest = Get-Content -LiteralPath "$root/examples/plugins/$name/plugin.json" -Raw | ConvertFrom-Json
-            foreach ($resource in $manifest.resources) {
-                $destination = Join-Path $plugin $resource
-                New-Item -ItemType Directory -Force (Split-Path -Parent $destination) | Out-Null
-                Copy-Item -LiteralPath "$root/examples/plugins/$name/$resource" -Destination $destination -Force
-            }
-        }
-        Copy-Item "$root/PLUGINS.md" $stage -Force
-        Copy-Item "$PSScriptRoot/portable-plugins-readme.txt" "$stage/README-PORTABLE.txt" -Force
-        $extras = @("$stage/plugins", "$stage/PLUGINS.md", "$stage/README-PORTABLE.txt")
-    }
+    # Plugin packages are maintained and distributed separately by Winc-plugin.
     # Enumerate the files: installer markers never enter a portable archive.
-    $files = @("$stage/winc.exe", "$stage/winc-pty.exe", "$stage/conpty.dll", "$stage/OpenConsole.exe", "$stage/winc-watch", "$stage/winc-server-Linux-x86_64", "$stage/winc-server-Linux-aarch64", "$stage/bin", "$stage/data", "$stage/LICENSE", "$stage/NOTICE", "$stage/winc.ico") + $extras
+    $files = @("$stage/winc.exe", "$stage/winc-pty.exe", "$stage/conpty.dll", "$stage/OpenConsole.exe", "$stage/winc-watch", "$stage/winc-server-Linux-x86_64", "$stage/winc-server-Linux-aarch64", "$stage/bin", "$stage/data", "$stage/LICENSE", "$stage/NOTICE", "$stage/winc.ico")
     Compress-Archive -Path $files -DestinationPath "$portable/$stem-portable.zip" -Force
     return
 }
