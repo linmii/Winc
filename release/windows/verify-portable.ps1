@@ -20,6 +20,8 @@ try {
         $required += @('PLUGINS.md', 'README-PORTABLE.txt',
             'plugins/winc.remove-duplicate-lines/plugin.json',
             'plugins/winc.remove-duplicate-lines/main.rhai',
+            'plugins/winc.remove-empty-line/plugin.json',
+            'plugins/winc.remove-empty-line/main.rhai',
             'plugins/winc.sort-json-keys/plugin.json',
             'plugins/winc.sort-json-keys/main.rhai')
     }
@@ -59,7 +61,7 @@ try {
         throw 'WSL launcher must use LF line endings'
     }
     if ($IncludePlugins) {
-        foreach ($name in @('remove-duplicate-lines', 'sort-json-keys')) {
+        foreach ($name in @('remove-duplicate-lines', 'remove-empty-line', 'sort-json-keys')) {
             $manifest = [Text.Encoding]::UTF8.GetString((Read-EntryBytes "plugins/winc.$name/plugin.json")) | ConvertFrom-Json
             if ($manifest.id -ne "winc.$name" -or $manifest.api_version -ne 1 -or
                 $manifest.commands[0].script -ne 'main.rhai') { throw "invalid bundled plugin manifest: $name" }

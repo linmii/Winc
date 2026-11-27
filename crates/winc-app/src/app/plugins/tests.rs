@@ -226,6 +226,51 @@ fn json_sort_command_handles_selections_atomically_and_supports_undo() {
 }
 
 #[test]
+fn remove_empty_line_supports_document_selections_and_undo() {
+    let source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/plugins/remove-empty-line");
+    for (original, selections, expected) in [
+        ("\n  甲\n \t\n乙\n", vec![], "  甲\n乙\n"),
+        ("\t\n \n\u{3000}", vec![], ""),
+        (
+            "外\n\n甲\n \n乙\n后\n\n",
+            vec![Selection::new(3, 9)],
+            "外\n\n甲\n乙\n后\n\n",
+        ),
+        (
+            "前\n甲\n \n中\n\t\n乙\n后",
+            vec![Selection::new(2, 6), Selection::new(8, 12)],
+            "前\n甲\n中\n乙\n后",
+        ),
+    ] {
+        let (mut app, _dir, _) = test_app(original);
+        app.import_plugin(source.clone());
+        let action = Action::from_id("plugin:winc.remove-empty-line/remove-empty-line").unwrap();
+        assert!(palette().contains(&action));
+        assert!(app.action_available(action));
+        if !selections.is_empty() {
+            app.editor
+                .active_mut()
+                .unwrap()
+                .set_selections(selections, 0);
+        }
+        let selections = app.editor.active().unwrap().selections();
+        assert!(app.run_action(action));
+        assert_eq!(text(&app), expected);
+        if expected.is_empty() {
+            assert_eq!(app.editor.active().unwrap().text().line_count(), 1);
+            // 再次处理空文档不会额外创建撤销步骤。
+            assert!(app.run_action(action));
+        }
+        app.run(Command::Undo);
+        assert_eq!(text(&app), original);
+        assert_eq!(app.editor.active().unwrap().selections(), selections);
+        app.run(Command::Redo);
+        assert_eq!(text(&app), expected);
+    }
+}
+
+#[test]
 fn jsonc_sort_preserves_field_comments_and_can_be_undone() {
     let source =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/plugins/sort-json-keys");
