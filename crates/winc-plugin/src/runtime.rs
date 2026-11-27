@@ -1,13 +1,16 @@
 //! Compile once on loading, execute on a worker with a fresh scope for every invocation.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use rhai::grain::{Compiler, Program, Vm};
-use rhai::{Dynamic, Engine, ImmutableString, Map, Scope};
+use rhai::{Dynamic, Engine, EvalAltResult, ImmutableString, Map, Scope};
 
 use crate::Error;
+
+pub(crate) type Resources = Arc<BTreeMap<String, ImmutableString>>;
 
 /// Maximum UTF-8 bytes accepted or returned by one text transformation (8 MiB).
 pub const MAX_TEXT_BYTES: usize = 8 * 1024 * 1024;
@@ -23,7 +26,7 @@ pub struct Input {
     pub command: String,
 }
 
-fn engine(cancel: Arc<AtomicBool>) -> Engine {
+fn engine(cancel: Arc<AtomicBool>, resources: Resources) -> Engine {
     let mut engine = Engine::new();
     engine.set_max_operations(5_000_000);
     engine.set_max_call_levels(32);
@@ -37,6 +40,16 @@ fn engine(cancel: Arc<AtomicBool>) -> Engine {
     engine.on_print(|_| {});
     engine.on_debug(|_, _, _| {});
     let started = Instant::now();
+    // Resources are validated UTF-8 snapshots. Scripts never read arbitrary filesystem paths.
+    engine.register_fn(
+        "read_resource",
+        move |name: ImmutableString| -> Result<ImmutableString, Box<EvalAltResult>> {
+            resources
+                .get(name.as_str())
+                .cloned()
+                .ok_or_else(|| format!("Undeclared plugin resource: {name}").into())
+        },
+    );
     engine.on_progress(move |_| {
         (cancel.load(Ordering::Relaxed) || started.elapsed() > Duration::from_secs(5))
             .then(|| Dynamic::from("Plugin cancelled or timed out"))
@@ -45,7 +58,7 @@ fn engine(cancel: Arc<AtomicBool>) -> Engine {
 }
 
 pub(crate) fn compile(source: &str) -> Result<Program<'static>, Error> {
-    let engine = engine(Arc::default());
+    let engine = engine(Arc::default(), Arc::default());
     // Avoid constant-folding user expressions during loading; runtime limits govern execution.
     let mut engine = engine;
     engine.set_optimization_level(rhai::OptimizationLevel::None);
@@ -58,6 +71,7 @@ pub(crate) fn execute(
     input: Input,
     options: &std::collections::BTreeMap<String, serde_json::Value>,
     cancel: Arc<AtomicBool>,
+    resources: Resources,
 ) -> Result<String, Error> {
     if input.text.len() > MAX_TEXT_BYTES {
         return Err(Error("Plugin input exceeds 8 MiB".into()));
@@ -85,7 +99,7 @@ pub(crate) fn execute(
     scope.push_constant("line_ending", input.line_ending);
     scope.push_constant("command", input.command);
     scope.push_constant("options", settings);
-    let engine = engine(cancel);
+    let engine = engine(cancel, resources);
     let value = Vm::new(&engine)
         .eval_with_scope(&mut scope, program)
         .map_err(|e| Error(e.to_string()))?;

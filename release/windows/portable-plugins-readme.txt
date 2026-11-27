@@ -3,9 +3,9 @@ Winc 自定义插件便携版（Windows x64）
 解压整个压缩包到可写目录，运行 winc.exe。
 如果旧版 Winc 仍在运行，请先退出旧版，或运行 winc.exe --new-instance。
 
-已安装“去除重复行 / Remove Duplicate Lines”、“删除空白行 / Remove Empty Lines”和“JSON 按字母排序 / Sort JSON Keys”插件：
+已安装“去除重复行”、“删除空白行”、“JSON 按字母排序”和“简繁转换”插件：
 1. 打开文本，选中需要处理的内容；不选中则处理全文。
-2. 打开命令面板，搜索“去除重复行”、“删除空白行”或“JSON 按字母排序”并执行。
+2. 打开命令面板，搜索“去除重复行”、“删除空白行”、“JSON 按字母排序”、“简体转繁体”或“繁体转简体”并执行。
 3. 在“设置 → 快捷键”中搜索该命令，绑定自己的快捷键。
 4. 可撤销整个处理操作；插件管理、导入和重新加载也位于命令面板。
 
@@ -14,7 +14,9 @@ JSON 排序会递归按键名升序排列对象，区分大小写，保留数组
 无效 JSON 或重复键会报错并保留原文；可在清单中将 indent 改为 1–8，随后重新加载插件。
 删除空白行会删除空行及只有空格、制表符等空白字符的行，保留非空白行的缩进和内容。
 非空输出保留原文末尾是否有换行；全文均为空白时清空文本，编辑器仍显示一行空白。
-插件分别位于 plugins/winc.remove-duplicate-lines、plugins/winc.remove-empty-line 和 plugins/winc.sort-json-keys。
+简繁转换优先匹配词组，再转换单字，保留原来的换行和空白；不进行台湾/香港地区用语转换。
+简繁歧义依赖词典，往返转换不保证无损。字典在插件 dictionaries 目录，修改后需要重新加载。
+插件分别位于 plugins/winc.remove-duplicate-lines、plugins/winc.remove-empty-line、plugins/winc.sort-json-keys 和 plugins/winc.chinese-conversion。
 plugins 与 data 同级，脚本和清单可直接编辑。
 旧版升级时，将 data/plugins 中的插件目录移入 plugins，同名插件保留自己修改的版本。
 编写和导入其他插件的方法见 PLUGINS.md，无需另装 Rhai、Node.js 或 Python。

@@ -1,4 +1,4 @@
-//! Package storage. Only the manifest and explicitly declared scripts are installed.
+//! Package storage. Only the manifest and explicitly declared scripts/resources are installed.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -13,7 +13,11 @@ use serde::{Deserialize, Serialize};
 use crate::{Error, Input, runtime};
 
 const MAX_MANIFEST: usize = 64 * 1024;
-const MAX_SCRIPT: usize = 256 * 1024;
+const MAX_SCRIPT: usize = 2 * 1024 * 1024;
+const MAX_RESOURCE: usize = 8 * 1024 * 1024;
+// Limit declared file contents after decompression, separately from the ZIP's on-disk size.
+const MAX_PACKAGE_FILES: usize = 16 * 1024 * 1024;
+const MAX_RESOURCES: usize = 32;
 const MAX_COMMANDS: usize = 32;
 const MAX_PLUGINS: usize = 64;
 
@@ -31,6 +35,9 @@ pub struct Manifest {
     pub api_version: u32,
     /// Commands exposed to the command palette and keyboard settings.
     pub commands: Vec<Command>,
+    /// Optional UTF-8 resource files accessible through `read_resource`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<String>,
 }
 
 /// One text transformation. Each invocation evaluates the named script.
@@ -58,6 +65,7 @@ pub struct Plugin {
     /// Script loading failure; metadata remains available for management and repair.
     pub error: Option<String>,
     programs: BTreeMap<String, Arc<Program<'static>>>,
+    resources: runtime::Resources,
 }
 
 impl Plugin {
@@ -83,6 +91,7 @@ impl Plugin {
             input,
             &command.options,
             cancel,
+            Arc::clone(&self.resources),
         )
     }
 
@@ -200,6 +209,7 @@ fn parse(bytes: &[u8]) -> Result<Manifest, Error> {
         || manifest.version.len() > 64
         || manifest.commands.is_empty()
         || manifest.commands.len() > MAX_COMMANDS
+        || manifest.resources.len() > MAX_RESOURCES
     {
         return Err(Error(
             "Invalid plugin metadata or unsupported API version (expected 1)".into(),
@@ -226,23 +236,51 @@ fn parse(bytes: &[u8]) -> Result<Manifest, Error> {
             ));
         }
     }
+    let mut files: HashSet<_> = manifest
+        .commands
+        .iter()
+        .map(|command| command.script.to_lowercase())
+        .collect();
+    for resource in &manifest.resources {
+        relative(resource)?;
+        let name = resource.to_lowercase();
+        // Prevent resources from replacing metadata, enabled state or an executable script.
+        if matches!(name.split('/').next(), Some("plugin.json" | ".disabled"))
+            || !files.insert(name)
+        {
+            return Err(Error("Duplicate or reserved plugin resource path".into()));
+        }
+    }
     Ok(manifest)
 }
 
 fn prepare(
     manifest: Manifest,
-    mut read: impl FnMut(&str) -> Result<Vec<u8>, Error>,
+    mut read: impl FnMut(&str, usize) -> Result<Vec<u8>, Error>,
 ) -> Result<(Plugin, BTreeMap<String, Vec<u8>>), Error> {
     let mut programs = BTreeMap::new();
     let mut sources = BTreeMap::new();
+    let mut resources = BTreeMap::new();
+    let mut total_bytes = 0;
     for command in &manifest.commands {
         if programs.contains_key(&command.script) {
             continue;
         }
-        let bytes = read(&command.script)?;
+        let bytes = read(
+            &command.script,
+            MAX_SCRIPT.min(MAX_PACKAGE_FILES - total_bytes),
+        )?;
+        total_bytes += bytes.len();
         let source = std::str::from_utf8(&bytes).map_err(|e| Error(e.to_string()))?;
         programs.insert(command.script.clone(), Arc::new(runtime::compile(source)?));
         sources.insert(command.script.clone(), bytes);
+    }
+    for name in &manifest.resources {
+        let bytes = read(name, MAX_RESOURCE.min(MAX_PACKAGE_FILES - total_bytes))?;
+        total_bytes += bytes.len();
+        let source = std::str::from_utf8(&bytes).map_err(|e| Error(e.to_string()))?;
+        resources.insert(name.clone(), source.into());
+        sources.insert(name.clone(), bytes);
     }
     Ok((
         Plugin {
@@ -250,6 +288,7 @@ fn prepare(
             enabled: true,
             error: None,
             programs,
+            resources: Arc::new(resources),
         },
         sources,
     ))
@@ -292,16 +331,18 @@ pub fn load(root: &Path) -> Catalog {
             if path.file_name().and_then(|s| s.to_str()) != Some(&manifest.id) {
                 return Err(Error("Installed directory must match plugin id".into()));
             }
-            let mut plugin =
-                match prepare(manifest.clone(), |name| local_file(&path, name, MAX_SCRIPT)) {
-                    Ok((plugin, _)) => plugin,
-                    Err(error) => Plugin {
-                        manifest,
-                        enabled: true,
-                        error: Some(error.to_string()),
-                        programs: BTreeMap::new(),
-                    },
-                };
+            let mut plugin = match prepare(manifest.clone(), |name, limit| {
+                local_file(&path, name, limit)
+            }) {
+                Ok((plugin, _)) => plugin,
+                Err(error) => Plugin {
+                    manifest,
+                    enabled: true,
+                    error: Some(error.to_string()),
+                    programs: BTreeMap::new(),
+                    resources: Arc::default(),
+                },
+            };
             plugin.enabled = !path.join(".disabled").try_exists()?;
             Ok::<_, Error>(plugin)
         })();
@@ -319,7 +360,7 @@ pub fn load(root: &Path) -> Catalog {
 }
 
 /// Install a directory, its `plugin.json`, or a ZIP with `plugin.json` at its root.
-/// Existing identifiers are never overwritten. Only validated manifest/script files are copied.
+/// Existing identifiers are never overwritten. Only validated manifest/script/resource files are copied.
 ///
 /// # Errors
 /// Returns an error for invalid packages, duplicate ids, exceeded limits or filesystem failures.
@@ -354,9 +395,9 @@ pub fn install(root: &Path, source: &Path) -> Result<String, Error> {
             MAX_MANIFEST,
         )?;
         let manifest = parse(&bytes)?;
-        prepare(manifest, |name| {
+        prepare(manifest, |name, limit| {
             let entry = archive.by_name(name).map_err(|e| Error(e.to_string()))?;
-            bounded(entry, MAX_SCRIPT)
+            bounded(entry, limit)
         })?
     } else {
         let dir = if source.is_dir() {
@@ -372,7 +413,7 @@ pub fn install(root: &Path, source: &Path) -> Result<String, Error> {
         };
         reject_link(dir)?;
         let manifest = parse(&local_file(dir, "plugin.json", MAX_MANIFEST)?)?;
-        prepare(manifest, |name| local_file(dir, name, MAX_SCRIPT))?
+        prepare(manifest, |name, limit| local_file(dir, name, limit))?
     };
     fs::create_dir_all(root)?;
     reject_link(root)?;
