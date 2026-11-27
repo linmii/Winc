@@ -9,6 +9,12 @@ Source: https://github.com/DEEIX-AI/Winc
 
 Third-party components
 
+The Chinese conversion plugin uses unmodified OpenCC 1.1.9 character and
+phrase dictionaries (STCharacters, STPhrases, TSCharacters and TSPhrases),
+from https://github.com/BYVoid/OpenCC/tree/ver.1.1.9/data/dictionary.
+OpenCC is licensed under the Apache License, Version 2.0; see LICENSE.
+The conversion algorithm in this fork is implemented independently.
+
 The OneDark Pro Italic Vivid theme is adapted from the user-supplied
 theme.json, based on One Dark Pro (https://github.com/Binaryify/OneDark-Pro).
 One Dark Pro is used under the MIT License reproduced below:

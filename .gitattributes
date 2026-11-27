@@ -2,3 +2,6 @@
 crates/winc-vim/fixtures/* linguist-generated=true
 # shell 集成脚本由 Linux、WSL 和远端主机上的 shell 读取：总以 LF 检出，Windows 上同样如此。
 crates/winc-pty/shell/* text eol=lf
+# 保持第三方字典原始换行，并在代码审查中默认折叠数据文件。
+examples/plugins/chinese-conversion/dictionaries/* text eol=lf linguist-vendored=true
+examples/plugins/chinese-conversion/dictionaries/LICENSE whitespace=-blank-at-eof

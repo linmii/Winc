@@ -45,10 +45,16 @@ if ($Phase -eq 'portable') {
     $extras = @()
     if ($IncludePlugins) {
         # Plugins sit beside data so packages and profile data can be managed separately.
-        foreach ($name in @('remove-duplicate-lines', 'remove-empty-line', 'sort-json-keys')) {
+        foreach ($name in @('remove-duplicate-lines', 'remove-empty-line', 'sort-json-keys', 'chinese-conversion')) {
             $plugin = "$stage/plugins/winc.$name"
             New-Item -ItemType Directory -Force $plugin | Out-Null
             Copy-Item "$root/examples/plugins/$name/plugin.json", "$root/examples/plugins/$name/main.rhai" $plugin -Force
+            $manifest = Get-Content -LiteralPath "$root/examples/plugins/$name/plugin.json" -Raw | ConvertFrom-Json
+            foreach ($resource in $manifest.resources) {
+                $destination = Join-Path $plugin $resource
+                New-Item -ItemType Directory -Force (Split-Path -Parent $destination) | Out-Null
+                Copy-Item -LiteralPath "$root/examples/plugins/$name/$resource" -Destination $destination -Force
+            }
         }
         Copy-Item "$root/PLUGINS.md" $stage -Force
         Copy-Item "$PSScriptRoot/portable-plugins-readme.txt" "$stage/README-PORTABLE.txt" -Force

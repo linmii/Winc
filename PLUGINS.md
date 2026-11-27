@@ -34,9 +34,13 @@ plugins/
 ├── winc.remove-empty-line/
 │   ├── plugin.json
 │   └── main.rhai
-└── winc.sort-json-keys/
+├── winc.sort-json-keys/
+│   ├── plugin.json
+│   └── main.rhai
+└── winc.chinese-conversion/
     ├── plugin.json
-    └── main.rhai
+    ├── main.rhai
+    └── dictionaries/
 ```
 
 旧版升级时，将 `data/plugins` 中的插件目录移入同级的 `plugins`，同名插件保留自己
@@ -58,6 +62,20 @@ plugins/
 - 保留其余行的顺序、缩进、行尾空格和重复内容。
 - 输出使用文档换行符，非空输出保留输入末尾是否有换行；全文均为空白时返回空文本，编辑器仍显示一行空白。
 - 可在“设置 → 快捷键”中搜索“删除空白行”绑定快捷键；命令标识为 `plugin:winc.remove-empty-line/remove-empty-line`。
+
+## 简繁转换
+
+使用“插件：导入目录”选择 `examples/plugins/chinese-conversion`，或导入
+`chinese-conversion-1.0.0.zip`。带插件的 Windows 便携包会预装此插件。
+需要本次新增的插件资源接口，旧版 Winc 必须更新后才能导入。
+
+- 命令面板搜索“简体转繁体 / Simplified to Traditional Chinese”或“繁体转简体 / Traditional to Simplified Chinese”。
+- 无选区时转换全文；有选区时只转换所选内容，多个选区一次撤销。
+- 采用最长词组优先和单字回退，处理“头发/发展”“皇后/以后”等常见歧义，保留原来的换行和空白。
+- 使用通用简繁字形，不替换台湾/香港地区用语；人名、古文等未收录语境可能有歧义，往返转换不保证无损。
+- 脚本自行实现转换，字典使用 OpenCC 1.1.9 的字符与词组数据（Apache-2.0），无需安装其他运行环境，运行时不联网。
+- 快捷键命令标识为 `plugin:winc.chinese-conversion/to-traditional` 和 `plugin:winc.chinese-conversion/to-simplified`。
+- 可编辑已安装包中的 `dictionaries` 文件，然后执行“插件：重新加载”。资源在加载时读取并缓存。
 
 ## JSON 按字母排序
 
@@ -102,7 +120,7 @@ my-plugin/
 └── main.rhai
 ```
 
-ZIP 内直接放 `plugin.json` 和脚本文件，不要额外包一层目录。导入时只复制清单和被声明的脚本。
+ZIP 内直接放 `plugin.json`、脚本和资源文件，不要额外包一层目录。导入时只复制清单和被声明的脚本、资源。
 
 ```json
 {
@@ -150,7 +168,15 @@ options.prefix + text.to_upper()
 有多个非空选区时分别调用脚本，在一个撤销单元中应用所有结果；重叠选区会先合并。
 所有选区都为空时处理全文。任何一次调用失败都会放弃整个操作，不会部分替换。
 
-脚本没有文件、网络、进程和编辑器内部对象的访问接口；不支持 `import` 和动态 `eval`。
+### 只读资源
+
+清单可选字段 `"resources": ["dictionaries/words.txt"]` 声明 UTF-8 文本文件，脚本用
+`read_resource("dictionaries/words.txt")` 获取内容。资源与脚本分开计量，导入、加载时统一校验，
+加载后使用只读内存快照；更改文件需重新加载。读取未声明路径会报错。
+路径必须在插件包内，不能读取任意文件、父目录或符号链接。此扩展保持原有无资源 API v1 插件兼容，
+使用资源的新插件需要更新宿主。
+
+脚本没有任意文件、网络、进程和编辑器内部对象的访问接口；不支持 `import` 和动态 `eval`。
 插件使用源码分发，加载时编译并缓存 Grain 程序；没有字节码包和 VS Code VSIX 兼容接口。
 
 ## 执行与限制
@@ -159,7 +185,8 @@ options.prefix + text.to_upper()
 - 单次操作输入、输出总量各不超过 8 MiB，最多 256 个选区。
 - 脚本执行限制为 500 万操作、32 层函数调用，并检查 5 秒执行期限和取消信号。
   这些是脚本检查点上的限制，不是操作系统级的硬实时或进程内存隔离。
-- 单脚本最多 256 KiB，清单最多 64 KiB，ZIP 最多 16 MiB；最多安装 64 个插件。
+- 单脚本最多 2 MiB，单个资源最多 8 MiB，脚本和资源合计最多 16 MiB（解压后），最多 32 个资源。
+- 清单最多 64 KiB，ZIP 压缩包最多 16 MiB；最多安装 64 个插件。资源不计入单脚本大小，但计入包总量。
 - 包内路径必须是相对路径，拒绝目录穿越、符号链接和重复的 ZIP 路径。
 - 执行期间文档被编辑、关闭或改成只读时，不会用旧结果覆盖文档。
 - 插件禁用、重新加载或窗口关闭后，运行中的结果会被取消或丢弃。
