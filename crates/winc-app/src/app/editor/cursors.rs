@@ -171,16 +171,18 @@ impl App {
     pub(in crate::app) fn line_cell_at(&self, x: f32, y: f32) -> Option<(usize, usize)> {
         let doc = self.editor.active()?;
         let tab_width = self.editor.active_tab_width();
-        if doc.is_wrapping() {
-            let pos = self.pos_at(x, y)?;
-            let (line, col) = doc.text().pos_to_line_col(pos);
-            return Some((line, doc.col_to_cell(line, col, tab_width)));
-        }
         let t = self.layout.text;
         let row = (f64::from((y - t.y) / self.fonts.line_height) + doc.scroll_line)
             .floor()
             .max(0.0) as usize;
         let line = doc.line_of_row(row.min(doc.row_count().saturating_sub(1)));
+        // 只有实际折行的长行才按字符位置换算；短行保留行尾右侧的鼠标列，避免框选起点
+        // 被截成短行长度，导致拖过较长行时选中文字，而不是在各行行尾放置光标。
+        if doc.is_wrapping() && doc.rows_of(line) > 1 {
+            let pos = self.pos_at(x, y)?;
+            let (line, col) = doc.text().pos_to_line_col(pos);
+            return Some((line, doc.col_to_cell(line, col, tab_width)));
+        }
         let cell = ((x - (t.x + TEXT_PAD - doc.scroll_x)) / self.metrics.cell)
             .round()
             .max(0.0) as usize;

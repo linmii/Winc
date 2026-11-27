@@ -202,21 +202,22 @@ fn select_all_occurrences_keeps_the_one_at_the_cursor_primary() {
 }
 
 #[test]
-fn column_selection_skips_short_lines_and_types_on_each_line() {
+fn column_selection_clamps_short_lines_and_types_on_each_line() {
     let mut d = doc("abcd\na\n\nabcd", &[0]);
     d.select_columns((0, 1), (3, 3), 4);
-    // 「a」正好够到框的左边，放一个光标；空行比框的左边短，跳过。
+    // 短行和空行都在行尾放一个光标，插入时每行都会得到文字。
     assert_eq!(
         d.selections().0,
         vec![
             Selection::new(1, 3),
             Selection::point(6),
+            Selection::point(7),
             Selection::new(9, 11)
         ]
     );
     assert_eq!(d.selection, Selection::new(9, 11));
     run(&mut d, Command::Insert("-".into()));
-    assert_eq!(text(&d), "a-d\na-\n\na-d");
+    assert_eq!(text(&d), "a-d\na-\n-\na-d");
 
     // 宽度为 0 的框：每行一个光标，向上框选时主光标在上面一行。
     let mut d = doc("ab\nab\nab", &[0]);

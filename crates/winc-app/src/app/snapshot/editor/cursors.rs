@@ -156,7 +156,7 @@ fn alt_click_adds_cursors_and_shift_alt_drag_selects_a_column() {
     app.run(Command::Insert("v".into()));
     assert!(text(&app).contains("let va = 1;\n    let v = 2;\n    let va = 3;"));
 
-    // 短于框左边界的行（只有「}」的一行）不生成选区；指针最终所在的行即使为空也生成光标。
+    // 短于框左边界的行（只有「}」的一行）与空行都在各自行尾生成光标。
     app.pointer.modifiers = ModifiersState::SHIFT | ModifiersState::ALT;
     let (x, y) = point(&app, 4, 30);
     app.on_mouse_move(x, y);
@@ -165,7 +165,7 @@ fn alt_click_adds_cursors_and_shift_alt_drag_selects_a_column() {
     app.on_mouse_move(x, y);
     app.on_mouse_up(MouseButton::Left);
     app.pointer.modifiers = ModifiersState::empty();
-    assert_eq!(carets(&app), [caret((4, 30)), caret((6, 0))]);
+    assert_eq!(carets(&app), [caret((4, 30)), caret((5, 1)), caret((6, 0))]);
 
     // 中键拖动同样框选一列；框超出行尾时，选区止于行尾。
     let (x, y) = point(&app, 1, 4);
@@ -176,6 +176,56 @@ fn alt_click_adds_cursors_and_shift_alt_drag_selects_a_column() {
     app.on_mouse_up(MouseButton::Middle);
     assert_eq!(carets(&app), [((1, 4), (1, 15)), ((2, 4), (2, 14))]);
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn middle_drag_beyond_text_places_a_caret_at_every_line_end() {
+    let dir = sample_folder("cursor-middle-line-ends");
+    let path = dir.join("lines.txt");
+    let lines = ["短", "\tlonger 中文😀", "", "x", "last"];
+    let expected: Vec<_> = lines
+        .iter()
+        .enumerate()
+        .map(|(line, text)| caret((line, text.chars().count())))
+        .collect();
+    for wrap in [true, false] {
+        for ending in ["\n", "\r\n"] {
+            let original = lines.join(ending);
+            for (first, last) in [(0, 4), (4, 0)] {
+                std::fs::write(&path, &original).unwrap();
+                let mut app = app_with(&path, false);
+                app.config.word_wrap = Some(wrap);
+                app.focus = Focus::Editor;
+                paint(&mut app);
+                let doc = app.editor.active().unwrap();
+                assert_eq!(doc.is_wrapping(), wrap);
+                // 开启自动换行，但每个文本行仍只有一个显示行，复现右侧空白处拖动的情况。
+                assert!((0..lines.len()).all(|line| doc.rows_of(line) == 1));
+                let (x, y) = point(&app, first, 40);
+                assert!(app.layout.text.contains(x, y));
+                app.on_mouse_move(x, y);
+                app.on_mouse_down(MouseButton::Middle);
+                // 轻微横向移动也不能选中文字，或跳过短行和空行。
+                let (x, y) = point(&app, last, 41);
+                app.on_mouse_move(x, y);
+                app.on_mouse_up(MouseButton::Middle);
+                assert_eq!(
+                    carets(&app),
+                    expected,
+                    "wrap={wrap}, direction={first}->{last}"
+                );
+                let doc = app.editor.active().unwrap();
+                assert_eq!(doc.text().pos_to_line_col(doc.selection.head).0, last);
+                app.run(Command::Insert("!".into()));
+                let inserted = lines.map(|line| format!("{line}!")).join(ending);
+                assert_eq!(text(&app), inserted);
+                app.run(Command::Undo);
+                assert_eq!(text(&app), original);
+                assert_eq!(carets(&app), expected);
+            }
+        }
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -559,8 +559,7 @@ impl Document {
     ///
     /// 行号与显示列均从 0 起。
     ///
-    /// 比框的左边还短的行不放选区（框的宽度为 0 时同样跳过），但 `head` 所在的行总会有一个
-    /// 选区；折叠隐藏的行跳过。
+    /// 超过各行行尾的端点停在行尾，短行和空行也保留光标；折叠隐藏的行跳过。
     pub fn select_columns(
         &mut self,
         anchor: (usize, usize),
@@ -569,7 +568,6 @@ impl Document {
     ) {
         let last = self.text.line_count().saturating_sub(1);
         let (anchor_line, head_line) = (anchor.0.min(last), head.0.min(last));
-        let left = anchor.1.min(head.1);
         let columns = self.columns(tab_width);
         let columns = columns.as_deref();
         let mut all = Vec::new();
@@ -584,9 +582,7 @@ impl Document {
                 continue;
             }
             let len = self.text.line_len(line);
-            if !is_head && self.col_to_cell_with(columns, line, len, tab_width) < left {
-                continue;
-            }
+            // 逐行限制端点，不因文字短于框选列而丢掉该行的光标。
             let start = self.text.line_start(line);
             let at = |cell: usize| {
                 start
