@@ -45,7 +45,7 @@ if ($Phase -eq 'portable') {
     $extras = @()
     if ($IncludePlugins) {
         # Plugins sit beside data so packages and profile data can be managed separately.
-        foreach ($name in @('remove-duplicate-lines', 'sort-json-keys')) {
+        foreach ($name in @('remove-duplicate-lines', 'remove-empty-line', 'sort-json-keys')) {
             $plugin = "$stage/plugins/winc.$name"
             New-Item -ItemType Directory -Force $plugin | Out-Null
             Copy-Item "$root/examples/plugins/$name/plugin.json", "$root/examples/plugins/$name/main.rhai" $plugin -Force

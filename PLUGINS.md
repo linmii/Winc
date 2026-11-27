@@ -31,6 +31,9 @@ plugins/
 ├── winc.remove-duplicate-lines/
 │   ├── plugin.json
 │   └── main.rhai
+├── winc.remove-empty-line/
+│   ├── plugin.json
+│   └── main.rhai
 └── winc.sort-json-keys/
     ├── plugin.json
     └── main.rhai
@@ -41,6 +44,20 @@ plugins/
 
 修改原来的导入目录不会影响已安装副本；开发时修改已安装脚本，随后执行
 “插件：重新加载”。禁用状态保存在包目录的 `.disabled` 文件中。
+
+## 删除空白行
+
+使用“插件：导入目录”选择 `examples/plugins/remove-empty-line`，或通过“插件：导入插件包或清单”
+选择其中的 `plugin.json` 或 `remove-empty-line-1.0.0.zip`。带插件的 Windows 便携包会预装此插件。
+已有 API v1 插件功能的版本可直接导入，无需重新编译。
+
+打开命令面板，搜索“删除空白行 / Remove Empty Lines”并执行；不选中文字时处理全文，有选区时只处理
+选区内容，建议按整行选择。多个选区分别处理，一次撤销可还原整个操作。
+
+- 删除空行及仅含空格、制表符、全角空格等空白字符的行。
+- 保留其余行的顺序、缩进、行尾空格和重复内容。
+- 输出使用文档换行符，非空输出保留输入末尾是否有换行；全文均为空白时返回空文本，编辑器仍显示一行空白。
+- 可在“设置 → 快捷键”中搜索“删除空白行”绑定快捷键；命令标识为 `plugin:winc.remove-empty-line/remove-empty-line`。
 
 ## JSON 按字母排序
 

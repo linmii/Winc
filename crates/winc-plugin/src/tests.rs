@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 mod json_sort;
+mod remove_empty_line;
 
 struct Temp(PathBuf);
 impl Temp {
