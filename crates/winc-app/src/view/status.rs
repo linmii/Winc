@@ -450,7 +450,7 @@ pub(super) fn draw_status(app: &mut App, frame: &mut Frame<'_>) {
         }
     }
 
-    // 只读开关位于远程按钮左侧；文档因自身的状态而只读时不显示。
+    // 只读开关位于远程按钮左侧；默认只读的二进制/有损文本也可在此解锁。
     if let Some(doc) = shown.filter(|doc| doc.can_lock()) {
         let item = StatusItem::ReadOnly;
         let slot = right - icons::SIDEBAR_WIDTH;

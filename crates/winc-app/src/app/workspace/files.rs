@@ -64,7 +64,7 @@ pub enum Pick {
 /// 无法打开的文件在编辑区中给出的操作。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaceholderAction {
-    /// 以文本方式打开二进制文件，只读。
+    /// 以文本方式打开二进制文件，默认只读，可通过只读开关解锁。
     OpenAsText,
     /// 按十六进制查看文件的字节。
     ShowHex,
@@ -406,9 +406,10 @@ impl App {
         let Some(doc) = self.editor.active() else {
             return;
         };
-        match doc.unwritable_reason() {
-            Some(reason) => self.flash(reason),
-            None => self.set_read_only(doc.id, !doc.is_locked()),
+        if doc.can_lock() {
+            self.set_read_only(doc.id, !(doc.is_locked() || doc.readonly));
+        } else if let Some(reason) = doc.unwritable_reason() {
+            self.flash(reason);
         }
     }
 
@@ -417,7 +418,7 @@ impl App {
         let Some(doc) = self.editor.document_mut(id) else {
             return;
         };
-        doc.set_locked(on);
+        doc.set_read_only(on);
         self.remember_session();
         self.request_redraw();
     }

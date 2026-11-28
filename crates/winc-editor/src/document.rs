@@ -468,7 +468,7 @@ pub struct Document {
     pub indent_override: Option<Indent>,
     /// 在状态栏为该文件选择的 Tab 显示宽度（显示列）。
     pub tab_width_override: Option<usize>,
-    /// 是否只读：预览图、二进制文件、含无法解码字节的文件都是只读。
+    /// 是否只读：预览图始终只读；二进制、含无法解码字节的文本默认只读，可由用户解锁。
     pub readonly: bool,
     /// 用户是否把文档设为只读：不接受编辑，已有的修改仍可保存。
     locked: bool,
@@ -667,7 +667,7 @@ impl Document {
         Self::open_with(id, path, false)
     }
 
-    /// 把二进制文件当作文本打开（「以文本方式打开」），只读。
+    /// 把二进制文件当作文本打开（「以文本方式打开」），默认只读，可通过 [`Self::set_read_only`] 解锁。
     ///
     /// # Errors
     ///
@@ -958,14 +958,31 @@ impl Document {
         self.locked
     }
 
-    /// 用户能否切换文档的只读状态：因自身的状态而只读的文档不能。
+    /// 用户能否切换文档的只读状态：已完整解码到内存的文本可以解除编码限制。
     pub fn can_lock(&self) -> bool {
         !self.readonly
+            || (matches!(self.encoding, Encoding::Lossy | Encoding::Binary)
+                && !self.is_large()
+                && !self.pending
+                && self.title.is_none()
+                && self.shows_text()
+                && !self.previewing())
     }
 
-    /// 由用户把文档设为只读或恢复为可以编辑。
+    /// 恢复用户的只读标记，不解除编码限制；用户主动切换时用 [`Self::set_read_only`]。
     pub fn set_locked(&mut self, locked: bool) {
         self.locked = locked;
+    }
+
+    /// 用户主动切换只读状态；解锁二进制或有损解码的文本后，按 UTF-8 保存显示的内容。
+    pub fn set_read_only(&mut self, locked: bool) {
+        if !locked && self.readonly && self.can_lock() {
+            // Binary/Lossy 只是读取结果，不能用于写回；解锁不改文本、不立即写入磁盘。
+            self.encoding = Encoding::Utf8;
+            self.chosen = Some(Encoding::Utf8);
+            self.readonly = false;
+        }
+        self.set_locked(locked);
     }
 
     /// 所在的窗口是否把全部文档设为只读。

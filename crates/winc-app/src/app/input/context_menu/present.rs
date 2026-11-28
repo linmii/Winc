@@ -648,7 +648,7 @@ impl App {
                 );
                 let doc = &docs[index];
                 if doc.can_lock() && doc.shows_text() {
-                    let command = MenuCommand::ReadOnly(!doc.is_locked());
+                    let command = MenuCommand::ReadOnly(!(doc.is_locked() || doc.readonly));
                     menu.extend([MenuEntry::Separator, MenuEntry::Item(command, true)]);
                 }
                 if let Some(path) = path.filter(|p| self.in_repo(p)) {
@@ -702,7 +702,10 @@ impl App {
                 document_language_menu(doc.path.is_some(), &self.state.recent_languages)
             }
             MenuTarget::ReadOnly(id) => {
-                let own = self.editor.document(*id).is_some_and(|doc| doc.is_locked());
+                let own = self
+                    .editor
+                    .document(*id)
+                    .is_some_and(|doc| doc.is_locked() || doc.readonly);
                 read_only_menu(own, self.editor.all_locked())
             }
             MenuTarget::Keymap => {

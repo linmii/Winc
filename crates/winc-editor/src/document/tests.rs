@@ -138,6 +138,87 @@ fn rejects_binary_and_marks_invalid_utf8_readonly() {
 }
 
 #[test]
+fn binary_and_lossy_text_can_be_unlocked_edited_and_saved() {
+    let dir = scratch("unlock-text");
+    let mut damaged = "中文中文中文中文中文".as_bytes().to_vec();
+    damaged.push(0xff);
+    for (name, bytes, encoding) in [
+        ("binary.bin", vec![0, 0xff, b'a'], Encoding::Binary),
+        ("damaged.txt", damaged, Encoding::Lossy),
+    ] {
+        let path = dir.join(name);
+        fs::write(&path, &bytes).unwrap();
+        let mut doc = Document::open_binary(DocumentId(1), path.clone()).unwrap();
+        assert_eq!(doc.encoding, encoding);
+        assert!(doc.can_lock() && doc.readonly_reason().is_some());
+        let shown = doc.text_range(0, usize::MAX).unwrap();
+
+        // 加载标签时恢复用户锁标记不能自动解除编码保护。
+        doc.set_locked(false);
+        doc.execute(Command::Insert("blocked".into()), 10, 4);
+        assert_eq!(doc.text_range(0, usize::MAX).unwrap(), shown);
+        assert_eq!(
+            doc.save().unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+
+        doc.set_read_only(false);
+        assert!(doc.readonly_reason().is_none());
+        assert_eq!(doc.encoding, Encoding::Utf8);
+        assert!(!doc.is_dirty());
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+
+        doc.execute(Command::Insert("edited: ".into()), 10, 4);
+        let edited = format!("edited: {shown}");
+        assert_eq!(doc.text_range(0, usize::MAX).unwrap(), edited);
+        doc.execute(Command::Undo, 10, 4);
+        assert_eq!(doc.text_range(0, usize::MAX).unwrap(), shown);
+        doc.execute(Command::Redo, 10, 4);
+
+        // 再次上锁阻止编辑，但已有的修改仍然可以按 UTF-8 保存。
+        doc.set_read_only(true);
+        doc.execute(Command::Insert("blocked".into()), 10, 4);
+        assert_eq!(doc.text_range(0, usize::MAX).unwrap(), edited);
+        doc.save().unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), edited);
+        assert!(!doc.is_dirty());
+    }
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn unlocking_text_keeps_other_readonly_documents_protected() {
+    let dir = scratch("unlock-protected");
+    let path = dir.join("binary.bin");
+    fs::write(&path, [0, 0xff, b'a']).unwrap();
+    let mut preview = Document::open_binary(DocumentId(1), path.clone()).unwrap();
+    preview.set_language("image.svg");
+    assert!(preview.set_preview_mode(PreviewMode::Preview));
+    let mut large = Document::from_content(
+        DocumentId(2),
+        Content::Large(Box::new(
+            large::LargeText::open(fs::File::open(&path).unwrap()).unwrap(),
+        )),
+    );
+    large.encoding = Encoding::Binary;
+    large.readonly = true;
+    for mut doc in [
+        preview,
+        large,
+        Document::pending(DocumentId(3), path.clone()),
+        Document::open_any(DocumentId(4), path),
+        Document::output(DocumentId(5), "Output", "read only"),
+    ] {
+        assert!(!doc.can_lock());
+        let encoding = doc.encoding;
+        doc.set_read_only(false);
+        assert!(doc.readonly_reason().is_some());
+        assert_eq!(doc.encoding, encoding);
+    }
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn other_encodings_open_edit_and_save_back() {
     let dir = scratch("encodings");
 

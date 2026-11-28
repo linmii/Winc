@@ -860,6 +860,79 @@ fn a_binary_file_can_be_reopened_with_an_encoding() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// 默认只读的二进制/有损文本可以通过状态栏锁菜单解锁，随后编辑、重新上锁和保存。
+#[test]
+fn the_status_lock_unlocks_binary_and_lossy_text_for_editing() {
+    use crate::app::PlaceholderAction;
+    use crate::app::status::status_bar::StatusItem;
+    use crate::keymap::Action;
+    use winc_editor::Encoding;
+
+    let dir = sample_folder("unlock-text-menu");
+    let mut damaged = "中文中文中文中文中文".as_bytes().to_vec();
+    damaged.push(0xff);
+    for (name, bytes, encoding) in [
+        ("binary.bin", vec![0, 0xff, b'a'], Encoding::Binary),
+        ("damaged.txt", damaged, Encoding::Lossy),
+    ] {
+        let path = dir.join(name);
+        std::fs::write(&path, &bytes).unwrap();
+        let mut app = app_with(&path, false);
+        if encoding == Encoding::Binary {
+            app.run_placeholder_action(PlaceholderAction::OpenAsText);
+        }
+        let doc = app.editor.active().unwrap();
+        assert_eq!(doc.encoding, encoding);
+        assert!(doc.readonly_reason().is_some());
+
+        paint(&mut app);
+        let lock = app
+            .hits
+            .status
+            .iter()
+            .find(|(_, item)| *item == StatusItem::ReadOnly)
+            .map(|(rect, _)| *rect)
+            .expect("以文本打开后显示可点击的只读锁");
+        crate::app::snapshot::click(&mut app, (lock.x + 4.0, lock.y + 4.0));
+        assert!(menu_commands(&app).contains(&(MenuCommand::ReadOnly(false), true)));
+        app.run_menu_command(MenuCommand::ReadOnly(false));
+        assert!(app.editor.active().unwrap().readonly_reason().is_none());
+        assert_eq!(app.editor.active().unwrap().encoding, Encoding::Utf8);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+
+        app.run(Command::SelectAll);
+        app.run(Command::Insert("edited\n".into()));
+        app.run_action(Action::ToggleReadOnly);
+        app.run(Command::Insert("blocked".into()));
+        assert_eq!(
+            app.editor
+                .active()
+                .unwrap()
+                .text()
+                .rope()
+                .unwrap()
+                .to_string(),
+            "edited\n"
+        );
+        app.run_action(Action::ToggleReadOnly);
+        assert!(app.editor.active().unwrap().readonly_reason().is_none());
+        app.run_action(Action::Save);
+        app.wait_for_saves();
+        assert!(!app.editor.active().unwrap().is_dirty());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "edited\n");
+
+        // 命令入口也能直接解除初始只读，不必先从状态栏解锁一次。
+        std::fs::write(&path, &bytes).unwrap();
+        let mut app = app_with(&path, false);
+        if encoding == Encoding::Binary {
+            app.run_placeholder_action(PlaceholderAction::OpenAsText);
+        }
+        app.run_action(Action::ToggleReadOnly);
+        assert!(app.editor.active().unwrap().readonly_reason().is_none());
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `.properties` 打开后按 Unicode 转义显示字符，编码菜单中列出「Unicode 转义」并勾选，小写的转义
 /// 同样处理；其他文件不列出。
 #[test]
